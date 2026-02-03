@@ -97,7 +97,7 @@ def create_summarize_middleware(
         api_key = os.getenv("OPENROUTER_API_KEY")
         secret_key = SecretStr(api_key) if api_key else None
         base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        model_name = os.getenv("SUMMARIZE_MODEL", "anthropic/claude-3-haiku")
+        model_name = os.getenv("SUMMARIZE_MODEL", "google/gemini-3-flash-preview")
 
         model = ChatOpenAI(
             model=model_name,
