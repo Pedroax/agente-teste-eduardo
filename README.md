@@ -41,20 +41,50 @@ Isso garante que nenhuma mensagem é perdida, mesmo sob alta carga.
 
 ## Quick Start
 
+### 1. Instale o uv (gerenciador de pacotes)
+
 ```bash
-# 1. Clone e configure
+# Windows (PowerShell)
+irm https://astral.sh/uv/install.ps1 | iex
+
+# Mac/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Ou via pip (qualquer OS)
+pip install uv
+```
+
+### 2. Configure o projeto
+
+```bash
 git clone <repo-url>
 cd whatsapp-langchain
-make setup
+
+# Cria ambiente virtual e instala dependências
+uv venv
+uv pip install -e ".[dev]"
+
+# Configure as variáveis de ambiente
 cp .env.example .env   # Edite com suas chaves
-
-# 2. Desenvolva o agente
-make dev               # Abre o LangGraph Studio
-
-# 3. Rode a infraestrutura
-make up                # API + Worker + DB (Docker)
-make frontend          # Admin Panel
 ```
+
+### 3. Desenvolva o agente
+
+```bash
+uv run langgraph dev   # Abre o LangGraph Studio
+```
+
+### 4. Rode a infraestrutura (Fase 2+)
+
+```bash
+# API + Worker + DB (Docker)
+docker compose up -d
+
+# Admin Panel
+cd frontend && npm run dev
+```
+
+> **Atalhos (Mac/Linux/WSL):** Se preferir, use `make setup`, `make dev`, etc. Veja a seção Comandos.
 
 ## Estrutura do Projeto
 
@@ -89,24 +119,36 @@ whatsapp-langchain/
 
 ## Pré-requisitos
 
-- Python 3.12+
-- Node.js 20+
-- Docker e Docker Compose
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (gerenciador de pacotes — funciona no Windows, Mac e Linux)
+- Docker e Docker Compose (para Fase 2+)
+- Node.js 20+ (para o Admin Panel)
 - Conta [OpenRouter](https://openrouter.ai/) (LLM)
 - Conta [Twilio](https://www.twilio.com/) com número WhatsApp (para produção)
 
 ## Comandos
 
+### Comandos diretos (qualquer OS)
+
+```bash
+uv venv                      # Cria ambiente virtual
+uv pip install -e ".[dev]"   # Instala dependências
+uv run langgraph dev         # LangGraph Studio
+uv run ruff check .          # Lint
+uv run ruff format .         # Formata código
+uv run pyright src/          # Type check
+uv run pytest                # Testes
+```
+
+### Atalhos Makefile (Mac/Linux/WSL)
+
 ```bash
 make setup          # Cria .venv e instala dependências
 make dev            # LangGraph Studio (desenvolvimento de agentes)
-make db             # Sobe apenas o PostgreSQL
-make api            # Roda a API localmente
-make worker         # Roda o Worker localmente
-make frontend       # Roda o Admin Panel
-make up             # Sobe tudo com Docker
-make down           # Derruba tudo
-make logs           # Logs de todos os serviços
+make lint           # Ruff check
+make format         # Ruff format
+make check          # Lint + type check
+make clean          # Remove __pycache__
 ```
 
 ## Licença

@@ -2,23 +2,42 @@
 
 ## Pré-requisitos
 
-- **Python 3.12+** — [python.org](https://www.python.org/)
+- **Python 3.11+** — [python.org](https://www.python.org/)
+- **uv** — [docs.astral.sh/uv](https://docs.astral.sh/uv/) (gerenciador de pacotes)
+- **Docker e Docker Compose** — [docker.com](https://www.docker.com/) (para Fase 2+)
 - **Node.js 20+** — [nodejs.org](https://nodejs.org/) (para o Admin Panel)
-- **Docker e Docker Compose** — [docker.com](https://www.docker.com/)
 - **Conta OpenRouter** — [openrouter.ai](https://openrouter.ai/) (chave de API para os modelos)
 
-## 1. Setup
+## 1. Instalando o uv
+
+O **uv** é um gerenciador de pacotes moderno e rápido. Funciona nativamente no Windows, Mac e Linux.
+
+```bash
+# Windows (PowerShell)
+irm https://astral.sh/uv/install.ps1 | iex
+
+# Mac/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Ou via pip (qualquer OS)
+pip install uv
+```
+
+## 2. Setup do Projeto
 
 ```bash
 git clone <repo-url>
 cd whatsapp-langchain
 
 # Cria ambiente virtual e instala dependências
-make setup
+uv venv
+uv pip install -e ".[dev]"
 
 # Copia o template de variáveis de ambiente
 cp .env.example .env
 ```
+
+> **Atalho (Mac/Linux/WSL):** `make setup` faz o mesmo.
 
 Edite o `.env` com suas credenciais:
 
@@ -29,19 +48,21 @@ OPENROUTER_API_KEY=sk-or-v1-...
 # O resto pode ficar com os valores padrão para dev
 ```
 
-## 2. Desenvolvendo Agentes (LangGraph Studio)
+## 3. Desenvolvendo Agentes (LangGraph Studio)
 
 O jeito mais rápido de começar é usando o LangGraph Studio:
 
 ```bash
-make dev
+uv run langgraph dev
 ```
+
+> **Atalho (Mac/Linux/WSL):** `make dev`
 
 Isso abre o LangGraph Studio no navegador. Você pode conversar com o agente `assistant` e ver o grafo executando em tempo real.
 
 O agente é definido em `src/whatsapp_langchain/agents/catalog/assistant/`. Edite e veja as mudanças ao vivo.
 
-## 3. Rodando a Infraestrutura
+## 4. Rodando a Infraestrutura (Fase 2+)
 
 ### Com Docker (recomendado)
 
@@ -76,7 +97,7 @@ make worker
 make frontend
 ```
 
-## 4. Testando
+## 5. Testando
 
 ### Simular uma mensagem
 
@@ -108,7 +129,7 @@ curl -X POST http://localhost:8000/webhook/sync?agent=assistant \
 
 Este endpoint processa inline e retorna a resposta diretamente. Compare a latência com o endpoint async usando os [testes de stress](docs/STRESS_TESTING.md).
 
-## 5. Admin Panel
+## 6. Admin Panel
 
 Acesse http://localhost:3000 com as credenciais:
 

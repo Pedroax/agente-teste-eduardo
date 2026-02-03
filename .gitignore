@@ -32,9 +32,13 @@ docs/internal/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 htmlcov/
 .coverage
 *.cover
+
+# LangGraph
+.langgraph_api/
 
 # Jupyter
 .ipynb_checkpoints/
