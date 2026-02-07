@@ -1,4 +1,4 @@
-"""Agente assistant - assistente conversacional genérico.
+"""Agente rhawk_assistant - assistente da comunidade Top Hawks.
 
 Agente simples usando create_agent do LangChain 1.0.
 Usa middleware de contexto configurável (trim ou summarize).
@@ -31,12 +31,12 @@ from .prompts import SYSTEM_PROMPT
 load_dotenv()
 
 # Configurações via env vars
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
 
 def build_graph(checkpointer: BaseCheckpointSaver | None = None):
-    """Constrói o agente assistant.
+    """Constrói o agente rhawk_assistant.
 
     O agente usa middleware de contexto configurável via CONTEXT_STRATEGY:
     - trim: Remove mensagens antigas (custo zero, perde contexto)

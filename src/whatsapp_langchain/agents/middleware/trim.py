@@ -24,50 +24,55 @@ from typing import Any
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import before_model
+from langchain_core.messages import RemoveMessage
 from langgraph.runtime import Runtime
 
 
 def create_trim_middleware(keep_messages: int = 10):
     """Cria middleware que mantém apenas as N mensagens mais recentes.
 
-    O middleware preserva sempre a primeira mensagem (system prompt) e
-    as N mensagens mais recentes. Mensagens intermediárias são descartadas.
+    Descarta mensagens antigas e mantém as ``keep_messages`` mais recentes.
+    O system prompt não precisa de tratamento — o ``create_agent()`` o injeta
+    automaticamente via ``ModelRequest.system_message`` a cada chamada.
 
     Args:
-        keep_messages: Número de mensagens recentes a manter (além do system).
-                       Default: 10.
+        keep_messages: Número de mensagens recentes a manter. Default: 10.
 
     Returns:
         Função middleware decorada com @before_model.
 
     Exemplo:
-        Conversa com 15 mensagens + system, keep_messages=4:
+        Conversa com 15 mensagens, keep_messages=4:
 
-        Antes:  [system] [u1] [a1] [u2] [a2] ... [u7] [a7] [u8]
-        Depois: [system] [a6] [u7] [a7] [u8]
+        Antes:  [h1] [a1] [h2] [a2] ... [h7] [a7] [h8]
+        Depois: [a6] [h7] [a7] [h8]
 
     Nota:
-        O número de mensagens mantidas é ajustado para ser par (excluindo system),
-        garantindo que sempre tenhamos pares completos de user/assistant.
+        O número é ajustado para par, garantindo pares completos user/assistant.
+
+    Importante:
+        O reducer ``add_messages`` faz merge, não replace — retornar uma lista
+        menor NÃO remove mensagens. Usamos RemoveMessage para cada mensagem
+        que deve sair do estado.
     """
 
     @before_model
     def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         messages = state["messages"]
 
-        # Se temos poucas mensagens, não precisa fazer trim
-        # +1 porque a primeira é o system prompt
-        if len(messages) <= keep_messages + 1:
+        if len(messages) <= keep_messages:
             return None
 
-        # Preserva a primeira mensagem (system prompt)
-        first_msg = messages[0]
+        # Garante número par (pares completos user/assistant)
+        recent_count = keep_messages if keep_messages % 2 == 0 else keep_messages - 1
 
-        # Garante número par de mensagens (pares user/assistant completos)
-        recent_count = keep_messages if keep_messages % 2 == 0 else keep_messages + 1
-        recent_messages = messages[-recent_count:]
+        # Remove tudo antes das mensagens recentes
+        messages_to_remove = messages[:-recent_count]
 
-        # Retorna o novo estado com mensagens trimadas
-        return {"messages": [first_msg, *recent_messages]}
+        return {
+            "messages": [
+                RemoveMessage(id=m.id) for m in messages_to_remove if m.id is not None
+            ]
+        }
 
     return trim_messages

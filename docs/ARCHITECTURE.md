@@ -1,8 +1,10 @@
 # Arquitetura
 
+> **Fase atual:** Apenas o pacote de agentes está implementado. Este documento descreve a arquitetura completa do projeto para que você entenda o destino. Seções marcadas com 🔜 serão implementadas nas próximas fases.
+
 ## Visão Geral
 
-O sistema é composto por 4 serviços isolados que se comunicam via PostgreSQL:
+O sistema será composto por 4 serviços isolados que se comunicam via PostgreSQL:
 
 ![Arquitetura](architecture.png)
 
@@ -17,12 +19,16 @@ O sistema é composto por 4 serviços isolados que se comunicam via PostgreSQL:
 
 Cada serviço tem uma responsabilidade clara:
 
-| Serviço | Responsabilidade | Porta |
-|---------|-----------------|-------|
-| **API** | Recebe webhooks, valida, enfileira | 8000 |
-| **Worker** | Consome fila, executa agentes, envia resposta | — |
-| **Frontend** | Admin Panel (métricas, conversas) | 3000 |
-| **PostgreSQL** | Fila de mensagens + memória dos agentes | 5432 |
+| Serviço | Responsabilidade | Status |
+|---------|-----------------|--------|
+| **Agentes** | Definição de comportamento, middleware de contexto | Implementado |
+| **API** | Recebe webhooks, valida, enfileira | 🔜 Fase 2 |
+| **Worker** | Consome fila, executa agentes, envia resposta | 🔜 Fase 2 |
+| **PostgreSQL** | Fila de mensagens + memória dos agentes | 🔜 Fase 2 |
+| **Twilio** | Integração WhatsApp, mídia, rate limiting | 🔜 Fase 3 |
+| **Frontend** | Admin Panel (métricas, conversas) | 🔜 Fase 4 |
+
+> **Fase 3** não cria serviços novos — adiciona funcionalidades à API e ao Worker: integração com Twilio (receber/enviar mensagens WhatsApp), processamento de mídia (imagem e áudio), e rate limiting por telefone.
 
 ## Fluxo de uma Mensagem
 
@@ -30,7 +36,7 @@ Cada serviço tem uma responsabilidade clara:
 1. Usuário envia mensagem no WhatsApp
 
 2. Twilio recebe e faz POST no webhook da API
-   POST /webhook/twilio?agent=assistant
+   POST /webhook/twilio?agent=rhawk_assistant
 
 3. API valida, aplica rate limit, e enfileira no PostgreSQL
    INSERT INTO message_queue (phone, agent_id, body, process_after)
@@ -66,11 +72,124 @@ Em vez de Redis ou RabbitMQ, usamos o próprio PostgreSQL como fila:
 
 Quando escalar? Se a fila crescer consistentemente, considere Redis ou RabbitMQ. Mas para a maioria dos projetos WhatsApp, PostgreSQL é mais que suficiente.
 
-## Database
+---
+
+## Agentes (implementado)
+
+Esta é a única parte implementada na fase atual. O pacote de agentes define o comportamento dos bots.
+
+### Estrutura de um Agente
+
+```
+agents/catalog/rhawk_assistant/
+├── __init__.py     # Exports: build_graph, SYSTEM_PROMPT
+├── agent.py        # Factory build_graph() — configura modelo e middleware
+├── graph.py        # Exporta variável graph para langgraph dev
+└── prompts.py      # System prompt do agente
+```
+
+**`agent.py`** é o coração do agente. Usa `create_agent()` do LangChain:
+
+```python
+from langchain.agents import create_agent
+
+def build_graph(checkpointer=None):
+    model = ChatOpenAI(model=DEFAULT_MODEL, ...)
+    middleware = get_context_middleware()  # Lê CONTEXT_STRATEGY do .env
+
+    return create_agent(
+        model=model,
+        tools=[],
+        system_prompt=SYSTEM_PROMPT,
+        middleware=middleware,
+        checkpointer=checkpointer,
+    )
+```
+
+**`graph.py`** existe apenas para o LangGraph Studio. Exporta uma variável `graph` (não uma função):
+
+```python
+from whatsapp_langchain.agents.catalog.rhawk_assistant.agent import build_graph
+
+# Variável — langgraph dev espera isso
+graph = build_graph()
+```
+
+No `langgraph.json`, a referência é `graph.py:graph` (variável), não `graph.py:build_graph` (função). Isso porque o LangGraph Studio precisa de um grafo já compilado.
+
+### Middleware de Contexto
+
+Os middlewares gerenciam o tamanho do histórico de conversa. Sem eles, o contexto cresce infinitamente e ultrapassa o limite de tokens do modelo.
+
+#### Padrão `@before_model`
+
+O trim usa o decorator `@before_model` do LangChain. Esse padrão executa código **antes** de cada chamada ao modelo:
+
+```python
+@before_model
+def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    messages = state["messages"]
+    if len(messages) <= keep_messages + 1:
+        return None  # Não precisa fazer trim
+    first_msg = messages[0]  # Preserva system prompt
+    recent = messages[-keep_messages:]
+    return {"messages": [first_msg, *recent]}
+```
+
+Retornar `None` significa "não alterar o estado". Retornar um dict com `messages` substitui as mensagens.
+
+#### `SummarizationMiddleware`
+
+O summarize usa `SummarizationMiddleware` do LangChain, uma classe pronta que:
+1. Conta tokens do histórico
+2. Quando excede `trigger_tokens`, chama um modelo barato para sumarizar
+3. Substitui mensagens antigas por um resumo
+4. Mantém as `keep_messages` mais recentes intactas
+
+```python
+SummarizationMiddleware(
+    model=cheap_model,
+    trigger=("tokens", 4000),
+    keep=("messages", 10),
+    summary_prompt="Resuma a conversa...",
+)
+```
+
+#### Factory `get_context_middleware()`
+
+Em vez de cada agente configurar o middleware manualmente, a factory lê do `.env`:
+
+```python
+from whatsapp_langchain.agents.middleware import get_context_middleware
+
+middlewares = get_context_middleware()
+# Retorna [create_trim_middleware(...)] se CONTEXT_STRATEGY=trim
+# Retorna [create_summarize_middleware(...)] se CONTEXT_STRATEGY=summarize
+# Retorna [] se CONTEXT_STRATEGY=none
+```
+
+Aceita overrides para testes:
+
+```python
+middlewares = get_context_middleware(strategy="trim", trim_keep_messages=5)
+```
+
+### Comparação: Trim vs Summarize
+
+| | Trim | Summarize |
+|--|------|-----------|
+| **Custo** | Zero | 1 chamada LLM extra |
+| **Contexto** | Últimas N msgs (perde o resto) | Resumo + recentes |
+| **Latência** | Nenhuma | +1-2s por sumarização |
+| **Melhor para** | FAQ, conversas curtas | Suporte, vendas, conversas longas |
+
+---
+
+## 🔜 Database (Fase 2)
 
 ### Tabelas
 
-O sistema cria as tabelas automaticamente no boot (padrão `ensure_*_table()`):
+O sistema criará as tabelas automaticamente no boot (padrão `ensure_*_table()`):
 
 #### message_queue
 
@@ -123,9 +242,7 @@ Em projetos com equipes grandes e schemas complexos, ferramentas como Alembic s�
 - **Sem dependências extras** — Não precisa de Alembic, migration runner, etc
 - **Idempotente** — `CREATE TABLE IF NOT EXISTS` é seguro para rodar múltiplas vezes
 
-Quando migrar para Alembic? Quando o schema ficar complexo (10+ tabelas) ou quando múltiplos devs precisarem coordenar mudanças no banco.
-
-## Debounce de Mensagens
+## 🔜 Debounce de Mensagens (Fase 2)
 
 Quando alguém manda 3 mensagens seguidas no WhatsApp:
 
@@ -136,9 +253,9 @@ Quando alguém manda 3 mensagens seguidas no WhatsApp:
                  → Worker processa: "Oi\ntudo bem?\nme ajuda aí"
 ```
 
-O campo `process_after` implementa um buffer configurável (`MESSAGE_BUFFER_SECONDS`, default: 2.0). Mensagens do mesmo phone+agent são concatenadas enquanto novas mensagens chegam dentro da janela.
+O campo `process_after` implementa um buffer configurável. Mensagens do mesmo phone+agent são concatenadas enquanto novas mensagens chegam dentro da janela.
 
-## Rate Limiting
+## 🔜 Rate Limiting (Fase 3)
 
 Duas camadas de proteção:
 
@@ -147,64 +264,52 @@ Duas camadas de proteção:
 | **API** | Por phone_number | Abuso/spam | Rejeita (429) |
 | **LLM** | InMemoryRateLimiter | Custo excessivo | Aguarda (backpressure) |
 
-- **API**: `RATE_LIMIT_PER_HOUR=30` — limita mensagens por telefone
-- **LLM**: `LLM_RATE_LIMIT_REQUESTS_PER_SECOND=0.5` — limita chamadas ao modelo
-
-## Mídia
+## 🔜 Mídia (Fase 3)
 
 Suporte configurável a imagem e áudio:
 
-| Tipo | Processamento | Env var |
-|------|--------------|---------|
-| **Imagem** | Download → base64 → HumanMessage multimodal | `MEDIA_IMAGE_ENABLED` |
-| **Áudio** | Download → Whisper (transcrição) → texto | `MEDIA_AUDIO_ENABLED` |
-| **Vídeo** | Não suportado (mensagem informativa) | — |
-| **Output** | Sempre texto | — |
+| Tipo | Processamento |
+|------|--------------|
+| **Imagem** | Download → base64 → HumanMessage multimodal |
+| **Áudio** | Download → Whisper (transcrição) → texto |
+| **Vídeo** | Não suportado (mensagem informativa) |
 
 ## Memória dos Agentes
 
-O sistema oferece dois tipos de memória:
-
 ### Memória de Conversa (Checkpointer)
 
-Cada conversa tem um `thread_id` no formato `{phone}:{agent_id}`. O checkpointer do LangGraph salva todo o histórico no PostgreSQL.
+Cada conversa tem um `thread_id` no formato `{phone}:{agent_id}`. O checkpointer do LangGraph salva todo o histórico no PostgreSQL (em produção) ou in-memory (no LangGraph Studio).
 
 Para evitar que o contexto cresça infinitamente, dois middlewares estão disponíveis:
 
-| Middleware | Como funciona | Custo |
-|-----------|--------------|-------|
-| **Trim** | Mantém apenas as últimas N mensagens | Zero (descarta) |
-| **Summarize** | Sumariza mensagens antigas com LLM | 1 chamada extra |
+| Middleware | Como funciona | Custo | Status |
+|-----------|--------------|-------|--------|
+| **Trim** | Mantém apenas as últimas N mensagens | Zero (descarta) | Implementado |
+| **Summarize** | Sumariza mensagens antigas com LLM | 1 chamada extra | Implementado |
 
 ### Memória Semântica (Store) — Opcional
 
-Além do histórico de conversa, o agente pode lembrar **fatos sobre o usuário** entre conversas diferentes. Exemplos: "prefere linguagem formal", "é alérgico a amendoim", "já comprou produto X".
+Além do histórico de conversa, o agente poderá lembrar **fatos sobre o usuário** entre conversas diferentes. Exemplos: "prefere linguagem formal", "é alérgico a amendoim", "já comprou produto X".
 
-Usa o `Store` do LangGraph com **pgvector** para busca por similaridade:
+Usará o `Store` do LangGraph com **pgvector** para busca por similaridade:
 
 - **Escopo**: Cross-thread (todas as conversas de um usuário)
 - **Busca**: Semântica (por significado, não por palavras exatas)
 - **Storage**: Mesmo PostgreSQL (extensão pgvector)
-- **Custo**: ~$0.02/1M tokens de embedding (negligível)
-- **Habilitável via**: `SEMANTIC_MEMORY_ENABLED=true`
-
-Quando habilitada, o docker-compose usa `pgvector/pgvector:pg16` em vez de `postgres:16`.
 
 Escolha por agente. Veja [Criando Agentes](ADDING_AGENTS.md).
 
 ## Stack
 
-| Camada | Tecnologia |
-|--------|-----------|
-| Agentes | LangGraph 1.0+ |
-| LLM | OpenRouter (multi-model) |
-| API | FastAPI |
-| Database | PostgreSQL 16+ (pgvector para memória semântica) |
-| Frontend | Next.js + shadcn/ui + Tailwind |
-| WhatsApp | Twilio API |
-| Logs | structlog (JSON prod, pretty dev) |
-| Deploy | Railway (4 serviços) |
-| Stress Test | Locust |
+| Camada | Tecnologia | Status |
+|--------|-----------|--------|
+| Agentes | LangGraph + LangChain 1.0 | Implementado |
+| LLM | OpenRouter (multi-model) | Implementado |
+| API | FastAPI | 🔜 Fase 2 |
+| Database | PostgreSQL 16+ | 🔜 Fase 2 |
+| Frontend | Next.js + shadcn/ui + Tailwind | 🔜 Fase 4 |
+| WhatsApp | Twilio API | 🔜 Fase 3 |
+| Deploy | Railway | 🔜 Fase 4 |
 
 ## Variáveis de Ambiente
 
@@ -212,19 +317,14 @@ Toda a configuração é feita via variáveis de ambiente. Veja `.env.example` p
 
 | Variável | Default | Descrição |
 |----------|---------|-----------|
-| `DATABASE_URL` | — | Conexão PostgreSQL |
 | `OPENROUTER_API_KEY` | — | Chave da API OpenRouter |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Base URL do LLM |
-| `VALIDATE_TWILIO_SIGNATURE` | `false` | Validar webhook (true em prod) |
-| `RATE_LIMIT_PER_HOUR` | `30` | Msgs por telefone por hora |
-| `MESSAGE_BUFFER_SECONDS` | `2.0` | Janela de debounce |
-| `MEDIA_IMAGE_ENABLED` | `true` | Suporte a imagem |
-| `MEDIA_AUDIO_ENABLED` | `true` | Suporte a áudio |
-| `SEMANTIC_MEMORY_ENABLED` | `false` | Memória semântica (pgvector) |
-| `EMBEDDING_MODEL` | `openai:text-embedding-3-small` | Modelo de embedding |
-| `POLL_INTERVAL_SECONDS` | `1.0` | Intervalo de polling do Worker |
-| `ADMIN_USER` | `admin` | Usuário do Admin Panel |
-| `ADMIN_PASSWORD` | — | Senha do Admin Panel |
+| `OPENROUTER_MODEL` | `google/gemini-3-flash-preview` | Modelo principal do agente |
+| `CONTEXT_STRATEGY` | `trim` | Estratégia de contexto (trim/summarize/none) |
+| `TRIM_KEEP_MESSAGES` | `10` | Mensagens a manter no trim |
+| `SUMMARIZE_TRIGGER_TOKENS` | `4000` | Tokens antes de sumarizar |
+| `SUMMARIZE_KEEP_MESSAGES` | `10` | Mensagens a manter após sumarização |
+| `SUMMARIZE_MODEL` | `google/gemini-3-flash-preview` | Modelo para sumarização |
 
 ## Evoluções Futuras
 

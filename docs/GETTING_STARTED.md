@@ -4,8 +4,6 @@
 
 - **Python 3.11+** — [python.org](https://www.python.org/)
 - **uv** — [docs.astral.sh/uv](https://docs.astral.sh/uv/) (gerenciador de pacotes)
-- **Docker e Docker Compose** — [docker.com](https://www.docker.com/) (para Fase 2+)
-- **Node.js 20+** — [nodejs.org](https://nodejs.org/) (para o Admin Panel)
 - **Conta OpenRouter** — [openrouter.ai](https://openrouter.ai/) (chave de API para os modelos)
 
 ## 1. Instalando o uv
@@ -30,14 +28,14 @@ git clone <repo-url>
 cd whatsapp-langchain
 
 # Cria ambiente virtual e instala dependências
-uv venv
-uv pip install -e ".[dev]"
+make setup
+# Ou manualmente:
+# uv venv
+# uv pip install -e ".[dev]"
 
 # Copia o template de variáveis de ambiente
 cp .env.example .env
 ```
-
-> **Atalho (Mac/Linux/WSL):** `make setup` faz o mesmo.
 
 Edite o `.env` com suas credenciais:
 
@@ -53,137 +51,120 @@ OPENROUTER_API_KEY=sk-or-v1-...
 O jeito mais rápido de começar é usando o LangGraph Studio:
 
 ```bash
-uv run langgraph dev
+make dev
+# Ou manualmente: uv run langgraph dev
 ```
 
-> **Atalho (Mac/Linux/WSL):** `make dev`
+Isso abre o LangGraph Studio no navegador. Você pode:
+- Conversar com o agente `rhawk_assistant`
+- Ver o grafo executando em tempo real
+- Testar diferentes configurações de middleware
 
-Isso abre o LangGraph Studio no navegador. Você pode conversar com o agente `assistant` e ver o grafo executando em tempo real.
+O agente é definido em `src/whatsapp_langchain/agents/catalog/rhawk_assistant/`. Edite os arquivos e veja as mudanças ao vivo:
 
-O agente é definido em `src/whatsapp_langchain/agents/catalog/assistant/`. Edite e veja as mudanças ao vivo.
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `agent.py` | Factory `build_graph()` — configura modelo e middleware |
+| `graph.py` | Exporta variável `graph` para o LangGraph Studio |
+| `prompts.py` | System prompt do agente |
 
-## 4. Rodando a Infraestrutura (Fase 2+)
+### Configurando o Middleware de Contexto
 
-### Com Docker (recomendado)
+O `.env` controla a estratégia de gerenciamento de contexto:
 
 ```bash
-# Sobe API + Worker + PostgreSQL
-make up
+# No .env
+CONTEXT_STRATEGY=trim        # trim | summarize | none
 
-# Em outro terminal, sobe o Admin Panel
-make frontend
+# Para trim: mantém as N mensagens mais recentes
+TRIM_KEEP_MESSAGES=10
+
+# Para summarize: sumariza quando excede o limite de tokens
+SUMMARIZE_TRIGGER_TOKENS=4000
+SUMMARIZE_KEEP_MESSAGES=10
+SUMMARIZE_MODEL=google/gemini-3-flash-preview
 ```
 
-Serviços disponíveis:
-- **API**: http://localhost:8000
-- **Admin Panel**: http://localhost:3000
-- **Health Check**: http://localhost:8000/health
+Mude `CONTEXT_STRATEGY` e reinicie o LangGraph Studio para testar diferentes estratégias.
 
-### Sem Docker (desenvolvimento)
-
-Se preferir rodar cada serviço separadamente:
+## 4. Testes
 
 ```bash
-# Terminal 1: Banco de dados
-make db
-
-# Terminal 2: API
-make api
-
-# Terminal 3: Worker
-make worker
-
-# Terminal 4: Frontend
-make frontend
+make test
+# Ou manualmente: uv run pytest
 ```
 
-## 5. Testando
-
-### Simular uma mensagem
-
-Sem precisar do Twilio, você pode simular um webhook:
+Outros comandos úteis:
 
 ```bash
-curl -X POST http://localhost:8000/webhook/twilio?agent=assistant \
-  -d "MessageSid=SM123" \
-  -d "From=whatsapp:+5511999999999" \
-  -d "To=whatsapp:+5511888888888" \
-  -d "Body=Olá, tudo bem?" \
-  -d "NumMedia=0"
+make test-x    # Para no primeiro erro
+make test-v    # Output verboso
 ```
 
-A mensagem entra na fila. O Worker processa e loga a resposta no terminal.
+> **Nota:** Os testes de integração requerem `OPENROUTER_API_KEY` configurada no `.env`.
 
-### Endpoint síncrono (educacional)
+## 5. Qualidade de Código
 
-Para comparar com o fluxo assíncrono:
+O projeto usa **Ruff** para linting/formatação e **Pyright** para type checking.
 
 ```bash
-curl -X POST http://localhost:8000/webhook/sync?agent=assistant \
-  -d "MessageSid=SM123" \
-  -d "From=whatsapp:+5511999999999" \
-  -d "To=whatsapp:+5511888888888" \
-  -d "Body=Olá, tudo bem?" \
-  -d "NumMedia=0"
+# Encontra problemas
+make lint
+
+# Formata código automaticamente
+make format
+
+# Corrige problemas automaticamente
+make fix
+
+# Verifica tipos estáticos
+make typecheck
+
+# Verifica tudo de uma vez (lint + format + types)
+make check
 ```
 
-Este endpoint processa inline e retorna a resposta diretamente. Compare a latência com o endpoint async usando os [testes de stress](docs/STRESS_TESTING.md).
+Fluxo recomendado antes de commitar:
 
-## 6. Admin Panel
-
-Acesse http://localhost:3000 com as credenciais:
-
-- **Usuário**: valor de `ADMIN_USER` no `.env` (padrão: `admin`)
-- **Senha**: valor de `ADMIN_PASSWORD` no `.env`
-
-No painel você pode:
-- Ver métricas (conversas, mensagens processadas, fila)
-- Acompanhar conversas em tempo real
-- Monitorar o status da fila
-
-## Conectando ao Twilio (opcional para dev)
-
-Para testes locais, o Twilio não é necessário. O Worker loga as respostas no terminal.
-
-Para conectar ao WhatsApp real, você tem duas opções:
-
-1. **Deploy no Railway** (recomendado) — Veja [Deploy](DEPLOY.md)
-2. **ngrok** (opcional) — Se quiser testar localmente com WhatsApp real:
-   ```bash
-   ngrok http 8000
-   # Configure o webhook no Twilio com a URL do ngrok
-   ```
+```bash
+make fix && make format    # Corrige e formata
+make check                 # Verifica se está tudo ok
+```
 
 ## Troubleshooting
 
-### API não conecta ao banco
+### LangGraph Studio não abre
 
 ```
-Verifique se o PostgreSQL está rodando:
-docker-compose ps
-
-Verifique a variável DATABASE_URL no .env
+Verifique se o uv está instalado: uv --version
+Verifique se as dependências estão instaladas: make setup
+Verifique se o langgraph.json está na raiz do projeto
 ```
 
-### Worker não processa mensagens
+### Erro "OPENROUTER_API_KEY not set"
 
 ```
-Verifique se o Worker está rodando:
-make worker
-
-Verifique os logs:
-make logs
+Verifique se o .env existe: ls .env
+Verifique se a chave está configurada: grep OPENROUTER_API_KEY .env
+Gere uma chave em: https://openrouter.ai/keys
 ```
 
-### Agente não encontrado
+### Modelo não responde ou retorna erro
 
 ```
-Verifique se o agente está registrado no langgraph.json
-Verifique o parâmetro ?agent= na URL do webhook
+Verifique se a chave do OpenRouter tem créditos
+Verifique o modelo configurado em OPENROUTER_MODEL no .env
+Teste com um modelo gratuito: google/gemini-3-flash-preview
+```
+
+### Testes falham com "requires API key"
+
+```
+Os testes de integração precisam de uma chave válida no .env
+Para pular testes de integração: uv run pytest -k "not integration"
 ```
 
 ## Próximos Passos
 
-- [Criando Agentes](ADDING_AGENTS.md) — Crie seu próprio agente
-- [Arquitetura](ARCHITECTURE.md) — Entenda como o sistema funciona
-- [Deploy](DEPLOY.md) — Coloque em produção
+- [Criando Agentes](ADDING_AGENTS.md) — Crie seu próprio agente com middleware personalizado
+- [Arquitetura](ARCHITECTURE.md) — Entenda como o sistema funciona e para onde vai

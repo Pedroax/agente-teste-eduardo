@@ -7,12 +7,12 @@ Cada agente vive em seu próprio diretório dentro de `src/whatsapp_langchain/ag
 ```
 agents/catalog/meu_agente/
 ├── __init__.py
-├── graph.py      # StateGraph + build_graph()
-├── prompts.py    # System prompt
-└── state.py      # Estado do agente (TypedDict)
+├── agent.py      # Factory build_graph() — configura modelo e middleware
+├── graph.py      # Exporta variável graph para langgraph dev
+└── prompts.py    # System prompt
 ```
 
-A função `build_graph(checkpointer=None, store=None)` é o ponto de entrada. Ela retorna um grafo compilado do LangGraph.
+A função `build_graph(checkpointer=None)` é o ponto de entrada. Ela retorna um grafo compilado do LangGraph via `create_agent()`.
 
 ## Passo a Passo
 
@@ -23,20 +23,7 @@ mkdir -p src/whatsapp_langchain/agents/catalog/meu_agente
 touch src/whatsapp_langchain/agents/catalog/meu_agente/__init__.py
 ```
 
-### 2. Definir o estado
-
-```python
-# state.py
-from typing import TypedDict, Annotated, Sequence
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
-
-
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-```
-
-### 3. Definir o prompt
+### 2. Definir o prompt
 
 ```python
 # prompts.py
@@ -45,48 +32,71 @@ Seja objetivo, amigável e ajude o cliente a encontrar o produto ideal.
 Responda sempre em português."""
 ```
 
-### 4. Criar o grafo
+### 3. Criar o agente
+
+```python
+# agent.py
+import os
+
+from dotenv import load_dotenv
+from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from pydantic import SecretStr
+
+from whatsapp_langchain.agents.middleware import get_context_middleware
+
+from .prompts import SYSTEM_PROMPT
+
+load_dotenv()
+
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+
+def build_graph(checkpointer: BaseCheckpointSaver | None = None):
+    """Constrói o agente de vendas."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    secret_key = SecretStr(api_key) if api_key else None
+
+    model = ChatOpenAI(
+        model=DEFAULT_MODEL,
+        api_key=secret_key,
+        base_url=OPENROUTER_BASE_URL,
+    )
+
+    # Usa a mesma configuração de contexto do .env
+    middleware = get_context_middleware()
+
+    return create_agent(
+        model=model,
+        tools=[],
+        system_prompt=SYSTEM_PROMPT,
+        middleware=middleware,
+        checkpointer=checkpointer,
+    )
+```
+
+### 4. Exportar o grafo para o LangGraph Studio
 
 ```python
 # graph.py
-from langgraph.graph import StateGraph, START, END
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from whatsapp_langchain.agents.catalog.meu_agente.agent import build_graph
 
-from .state import AgentState
-from .prompts import SYSTEM_PROMPT
-from ...middleware.trim import create_trim_node
-
-
-def build_graph(checkpointer=None):
-    llm = ChatOpenAI(
-        model="openai/gpt-4o-mini",
-        base_url="https://openrouter.ai/api/v1",
-    )
-
-    async def call_model(state: AgentState):
-        messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-        response = await llm.ainvoke(messages)
-        return {"messages": [response]}
-
-    graph = StateGraph(AgentState)
-    graph.add_node("trim", create_trim_node())
-    graph.add_node("model", call_model)
-
-    graph.add_edge(START, "trim")
-    graph.add_edge("trim", "model")
-    graph.add_edge("model", END)
-
-    return graph.compile(checkpointer=checkpointer)
+# Variável graph para langgraph dev (in-memory, sem checkpointer)
+graph = build_graph()
 ```
+
+> **Importante:** O `langgraph.json` referencia uma **variável** (`graph.py:graph`), não uma **função** (`graph.py:build_graph`). O LangGraph Studio precisa de um grafo já compilado. Em produção, o Worker usará `build_graph(checkpointer=...)` de `agent.py` para passar o checkpointer do PostgreSQL.
 
 ### 5. Registrar no langgraph.json
 
 ```json
 {
+  "dependencies": ["."],
   "graphs": {
-    "assistant": "./src/whatsapp_langchain/agents/catalog/assistant/graph.py:build_graph",
-    "meu_agente": "./src/whatsapp_langchain/agents/catalog/meu_agente/graph.py:build_graph"
+    "rhawk_assistant": "./src/whatsapp_langchain/agents/catalog/rhawk_assistant/graph.py:graph",
+    "meu_agente": "./src/whatsapp_langchain/agents/catalog/meu_agente/graph.py:graph"
   },
   "env": ".env"
 }
@@ -100,114 +110,103 @@ make dev   # Abre o LangGraph Studio
 
 No Studio, selecione `meu_agente` e converse para validar.
 
-### 7. Ativar no WhatsApp
+## Middleware de Contexto
 
-Configure o webhook do Twilio com o parâmetro `agent`:
+Os agentes usam middleware para gerenciar o tamanho do histórico de conversa. O middleware é passado via parâmetro `middleware=` ao `create_agent()`.
 
+### Usando `get_context_middleware()` (recomendado)
+
+A forma mais simples é usar a factory que lê configuração do `.env`:
+
+```python
+from whatsapp_langchain.agents.middleware import get_context_middleware
+
+middleware = get_context_middleware()  # Lê CONTEXT_STRATEGY do .env
+
+agent = create_agent(
+    model=model,
+    middleware=middleware,
+    ...
+)
 ```
-https://sua-api.up.railway.app/webhook/twilio?agent=meu_agente
-```
 
-## Middleware de Memória
-
-Os agentes podem usar três middlewares para gerenciar memória:
-
-### Trim (recomendado para começar)
+### Trim (configuração direta)
 
 Mantém apenas as últimas N mensagens. Simples e sem custo extra.
 
 ```python
-from ...middleware.trim import create_trim_node
+from whatsapp_langchain.agents.middleware import create_trim_middleware
 
-# No grafo:
-graph.add_node("trim", create_trim_node(max_tokens=4000))
-graph.add_edge(START, "trim")
-graph.add_edge("trim", "model")
+trim = create_trim_middleware(keep_messages=10)
+
+agent = create_agent(
+    model=model,
+    middleware=[trim],
+    ...
+)
 ```
 
 **Quando usar**: Conversas curtas, respostas baseadas em contexto recente.
 
-### Summarize
+### Summarize (configuração direta)
 
 Sumariza mensagens antigas usando uma chamada extra ao LLM. Preserva mais contexto.
 
 ```python
-from ...middleware.summarize import create_summarize_node
+from whatsapp_langchain.agents.middleware import create_summarize_middleware
 
-# No grafo:
-graph.add_node("summarize", create_summarize_node(
-    llm=llm,
-    max_messages_before_summary=20,
-    messages_to_keep=5,
-))
-graph.add_edge(START, "summarize")
-graph.add_edge("summarize", "model")
+summarize = create_summarize_middleware(
+    trigger_tokens=4000,    # Sumariza quando exceder 4000 tokens
+    keep_messages=10,       # Mantém as 10 mais recentes
+)
+
+agent = create_agent(
+    model=model,
+    middleware=[summarize],
+    ...
+)
+```
+
+O modelo para sumarização é criado automaticamente usando `SUMMARIZE_MODEL` do `.env`. Para passar um modelo específico:
+
+```python
+summarize = create_summarize_middleware(
+    model=my_cheap_model,   # ChatOpenAI já instanciado
+    trigger_tokens=4000,
+    keep_messages=10,
+)
 ```
 
 **Quando usar**: Conversas longas onde o histórico é importante (ex: suporte ao cliente).
 
-### Semantic Memory (opcional)
-
-Lembra fatos sobre o usuário entre conversas. Requer `SEMANTIC_MEMORY_ENABLED=true` no `.env`.
-
-```python
-from langgraph.store.base import BaseStore
-
-def build_graph(checkpointer=None, store=None):
-    llm = ChatOpenAI(
-        model="openai/gpt-4o-mini",
-        base_url="https://openrouter.ai/api/v1",
-    )
-
-    async def call_model(state: AgentState, *, store: BaseStore):
-        # Busca memórias relevantes sobre o usuário
-        memories = []
-        if store:
-            phone = state.get("phone", "unknown")
-            items = store.search(
-                ("user", phone, "memories"),
-                query=state["messages"][-1].content,
-                limit=5,
-            )
-            memories = [item.value["text"] for item in items]
-
-        system = SYSTEM_PROMPT
-        if memories:
-            system += "\n\n## Memórias sobre este usuário:\n"
-            system += "\n".join(f"- {m}" for m in memories)
-
-        messages = [SystemMessage(content=system)] + state["messages"]
-        response = await llm.ainvoke(messages)
-        return {"messages": [response]}
-
-    graph = StateGraph(AgentState)
-    graph.add_node("model", call_model)
-    graph.add_edge(START, "model")
-    graph.add_edge("model", END)
-
-    return graph.compile(checkpointer=checkpointer, store=store)
-```
-
-O `store` é injetado automaticamente pelo LangGraph quando disponível. Se `SEMANTIC_MEMORY_ENABLED=false`, o parâmetro `store` será `None` e o agente funciona normalmente sem memória semântica.
-
-**Quando usar**: Agentes que precisam lembrar preferências, histórico de compras, ou fatos sobre o usuário ao longo do tempo.
-
 ### Trade-offs
 
-| | Trim | Summarize | Semantic Memory |
-|--|------|-----------|-----------------|
-| **Custo** | Zero | 1 chamada LLM extra | ~$0.02/1M tokens (embedding) |
-| **Escopo** | Thread (1 conversa) | Thread (1 conversa) | Cross-thread (todas) |
-| **Contexto** | Últimas N msgs | Resumo + recentes | Fatos do usuário |
-| **Latência** | Zero | +1-2s | +10-70ms |
-| **Melhor para** | FAQ, conversas curtas | Suporte longo | Personalização |
+| | Trim | Summarize |
+|--|------|-----------|
+| **Custo** | Zero | 1 chamada LLM extra |
+| **Escopo** | Thread (1 conversa) | Thread (1 conversa) |
+| **Contexto** | Últimas N msgs | Resumo + recentes |
+| **Latência** | Zero | +1-2s |
+| **Melhor para** | FAQ, conversas curtas | Suporte longo |
 
 ## Agente com Tools
 
 ```python
-# graph.py
+# agent.py
+import os
+
+from dotenv import load_dotenv
+from langchain.agents import create_agent
 from langchain_core.tools import tool
-from langgraph.prebuilt import ToolNode
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from pydantic import SecretStr
+
+from whatsapp_langchain.agents.middleware import get_context_middleware
+
+from .prompts import SYSTEM_PROMPT
+
+load_dotenv()
 
 
 @tool
@@ -217,33 +216,33 @@ def consultar_estoque(produto: str) -> str:
     return f"{produto}: 42 unidades disponíveis"
 
 
-def build_graph(checkpointer=None):
-    tools = [consultar_estoque]
-    llm = ChatOpenAI(model="openai/gpt-4o-mini").bind_tools(tools)
+def build_graph(checkpointer: BaseCheckpointSaver | None = None):
+    """Constrói o agente de vendas com tools."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    secret_key = SecretStr(api_key) if api_key else None
 
-    async def call_model(state):
-        messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-        return {"messages": [await llm.ainvoke(messages)]}
+    model = ChatOpenAI(
+        model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b"),
+        api_key=secret_key,
+        base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+    )
 
-    def should_continue(state):
-        last = state["messages"][-1]
-        return "tools" if last.tool_calls else END
+    middleware = get_context_middleware()
 
-    graph = StateGraph(AgentState)
-    graph.add_node("model", call_model)
-    graph.add_node("tools", ToolNode(tools))
-
-    graph.add_edge(START, "model")
-    graph.add_conditional_edges("model", should_continue)
-    graph.add_edge("tools", "model")
-
-    return graph.compile(checkpointer=checkpointer)
+    return create_agent(
+        model=model,
+        tools=[consultar_estoque],
+        system_prompt=SYSTEM_PROMPT,
+        middleware=middleware,
+        checkpointer=checkpointer,
+    )
 ```
 
 ## Boas Práticas
 
-- **Um agente por caso de uso** — `assistant`, `vendas`, `suporte`, etc
-- **Prompts em `prompts.py`** — Separados do código do grafo
-- **Estado em `state.py`** — Facilita adicionar campos customizados
+- **Um agente por caso de uso** — `rhawk_assistant`, `vendas`, `suporte`, etc
+- **Prompts em `prompts.py`** — Separados do código do agente
+- **Use `create_agent()`** — Não construa `StateGraph` manualmente a menos que precise de um fluxo não-linear
+- **Use `get_context_middleware()`** — Configuração centralizada via `.env`
 - **Sem dependências externas** — O agente não deve importar de `server/` ou `worker/`
-- **Teste no Studio primeiro** — `make dev` antes de conectar ao WhatsApp
+- **Teste no Studio primeiro** — `make dev` antes de tudo

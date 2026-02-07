@@ -11,7 +11,7 @@ import os
 import pytest
 from dotenv import load_dotenv
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
@@ -31,7 +31,7 @@ def model():
         pytest.skip("OPENROUTER_API_KEY não configurada")
 
     return ChatOpenAI(
-        model=os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001"),
+        model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b"),
         api_key=SecretStr(api_key),
         base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
     )
@@ -51,55 +51,81 @@ class TestTrimMiddleware:
         assert len(middleware) == 1
         assert middleware[0] is not None
 
-    def test_trim_logic_directly(self):
-        """Testa a lógica do trim diretamente, sem o agente."""
-        # Simula estado com muitas mensagens
+    def test_trim_removes_old_messages(self):
+        """Invoca o middleware real e verifica remoção via reducer."""
+        from langgraph.graph import add_messages
+
+        from whatsapp_langchain.agents.middleware.trim import create_trim_middleware
+
+        mw = create_trim_middleware(keep_messages=4)
+
         messages = [
-            SystemMessage(content="Você é um assistente."),
-            HumanMessage(content="Msg 1"),
-            AIMessage(content="Resp 1"),
-            HumanMessage(content="Msg 2"),
-            AIMessage(content="Resp 2"),
-            HumanMessage(content="Msg 3"),
-            AIMessage(content="Resp 3"),
-            HumanMessage(content="Msg 4"),
+            HumanMessage(content="Olá", id="h1"),
+            AIMessage(content="Resp 1", id="a1"),
+            HumanMessage(content="Msg 2", id="h2"),
+            AIMessage(content="Resp 2", id="a2"),
+            HumanMessage(content="Msg 3", id="h3"),
+            AIMessage(content="Resp 3", id="a3"),
+            HumanMessage(content="Msg 4", id="h4"),
         ]
 
-        # Simula o que o trim faria com keep_messages=2
-        keep_messages = 2
-        first_msg = messages[0]
+        result = mw.before_model({"messages": messages}, None)
 
-        # Garante número par
-        recent_count = keep_messages if keep_messages % 2 == 0 else keep_messages + 1
-        recent_messages = messages[-recent_count:]
+        # Middleware deve retornar RemoveMessages
+        assert result is not None
+        assert len(result["messages"]) == 3  # remove 3 das 7
 
-        result = [first_msg, *recent_messages]
+        # Aplica pelo reducer real — igual ao que o LangGraph faz
+        final = add_messages(messages, result["messages"])
 
-        # Deve ter: system + 2 mensagens recentes
-        assert len(result) == 3
-        assert result[0].content == "Você é um assistente."
-        assert result[-1].content == "Msg 4"
+        assert len(final) == 4
+        assert final[0].content == "Resp 2"
+        assert final[1].content == "Msg 3"
+        assert final[2].content == "Resp 3"
+        assert final[3].content == "Msg 4"
 
-    def test_trim_preserves_system_prompt(self):
-        """Verifica que o trim sempre preserva o system prompt."""
+    def test_trim_adjusts_odd_to_even(self):
+        """keep_messages ímpar é ajustado para par (pares user/assistant)."""
+        from langgraph.graph import add_messages
+
+        from whatsapp_langchain.agents.middleware.trim import create_trim_middleware
+
+        mw = create_trim_middleware(keep_messages=5)
+
         messages = [
-            SystemMessage(content="System importante"),
-            HumanMessage(content="Msg 1"),
-            AIMessage(content="Resp 1"),
-            HumanMessage(content="Msg 2"),
-            AIMessage(content="Resp 2"),
-            HumanMessage(content="Msg 3"),
+            HumanMessage(content="Msg 1", id="h1"),
+            AIMessage(content="Resp 1", id="a1"),
+            HumanMessage(content="Msg 2", id="h2"),
+            AIMessage(content="Resp 2", id="a2"),
+            HumanMessage(content="Msg 3", id="h3"),
+            AIMessage(content="Resp 3", id="a3"),
+            HumanMessage(content="Msg 4", id="h4"),
         ]
 
-        keep_messages = 2
-        first_msg = messages[0]
-        recent_count = keep_messages if keep_messages % 2 == 0 else keep_messages + 1
-        recent_messages = messages[-recent_count:]
+        result = mw.before_model({"messages": messages}, None)
 
-        result = [first_msg, *recent_messages]
+        assert result is not None
+        final = add_messages(messages, result["messages"])
 
-        # System prompt deve estar presente
-        assert result[0].content == "System importante"
+        # 5 ajustado para 4 → mantém últimas 4
+        assert len(final) == 4
+        assert final[0].content == "Resp 2"
+        assert final[3].content == "Msg 4"
+
+    def test_trim_no_op_when_few_messages(self):
+        """Não faz nada quando há poucas mensagens."""
+        from whatsapp_langchain.agents.middleware.trim import create_trim_middleware
+
+        mw = create_trim_middleware(keep_messages=4)
+
+        messages = [
+            HumanMessage(content="Olá", id="h1"),
+            AIMessage(content="Resp 1", id="a1"),
+        ]
+
+        result = mw.before_model({"messages": messages}, None)
+
+        assert result is None
 
     def test_trim_with_agent_integration(self, model):
         """Teste de integração: agente com trim responde corretamente."""
