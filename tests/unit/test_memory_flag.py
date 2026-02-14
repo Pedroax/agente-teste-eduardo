@@ -7,6 +7,7 @@ settings.memory_enabled para decidir se criam store.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from whatsapp_langchain.shared.config import settings
+from whatsapp_langchain.worker.media import MediaPreprocessResult
 
 
 class TestWebhookSyncMemoryFlag:
@@ -43,14 +44,19 @@ class TestProcessorMemoryFlag:
                 "whatsapp_langchain.worker.processor.AsyncPostgresStore"
             ) as mock_store,
             patch(
-                "whatsapp_langchain.worker.processor.build_human_message",
+                "whatsapp_langchain.worker.processor.preprocess_incoming_message",
                 new_callable=AsyncMock,
-            ),
+                return_value=MediaPreprocessResult(
+                    should_invoke_agent=True,
+                    normalized_text="Olá!",
+                    media_processing_status="none",
+                ),
+            ) as mock_preprocess,
             patch("whatsapp_langchain.worker.processor.load_graph") as mock_load,
             patch(
                 "whatsapp_langchain.worker.processor.mark_done",
                 new_callable=AsyncMock,
-            ),
+            ) as mock_mark_done,
             patch(
                 "whatsapp_langchain.worker.processor.upsert_conversation",
                 new_callable=AsyncMock,
@@ -84,8 +90,13 @@ class TestProcessorMemoryFlag:
 
             await process_message(message, AsyncMock())
 
+            mock_preprocess.assert_awaited_once()
+
             # AsyncPostgresStore NÃO deve ser criado
             mock_store.from_conn_string.assert_not_called()
+
+            # Salva como done com metadados de pré-processamento
+            assert mock_mark_done.await_count == 1
 
             # load_graph deve ser chamado SEM store
             mock_load.assert_called_once_with(

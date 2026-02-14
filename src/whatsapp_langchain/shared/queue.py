@@ -175,7 +175,9 @@ async def claim_next(
                 FOR UPDATE SKIP LOCKED
             )
             RETURNING id, message_id, phone_number, to_number, agent_id, thread_id,
-                      incoming_message, media_url, media_type, status,
+                      incoming_message, media_url, media_type,
+                      normalized_input, media_processing_status, media_processing_error,
+                      status,
                       process_after, attempts, max_attempts, lease_until,
                       response, error, created_at, updated_at, processed_at
             """,
@@ -197,16 +199,19 @@ async def claim_next(
             incoming_message=row[6],
             media_url=row[7],
             media_type=row[8],
-            status=row[9],
-            process_after=row[10],
-            attempts=row[11],
-            max_attempts=row[12],
-            lease_until=row[13],
-            response=row[14],
-            error=row[15],
-            created_at=row[16],
-            updated_at=row[17],
-            processed_at=row[18],
+            normalized_input=row[9],
+            media_processing_status=row[10],
+            media_processing_error=row[11],
+            status=row[12],
+            process_after=row[13],
+            attempts=row[14],
+            max_attempts=row[15],
+            lease_until=row[16],
+            response=row[17],
+            error=row[18],
+            created_at=row[19],
+            updated_at=row[20],
+            processed_at=row[21],
         )
 
         logger.info(
@@ -223,6 +228,9 @@ async def mark_done(
     pool: AsyncConnectionPool,
     message_id: int,
     response: str,
+    normalized_input: str | None = None,
+    media_processing_status: str | None = None,
+    media_processing_error: str | None = None,
 ) -> None:
     """Marca mensagem como processada com sucesso.
 
@@ -230,6 +238,9 @@ async def mark_done(
         pool: Pool de conexões do psycopg.
         message_id: ID da mensagem na fila.
         response: Resposta gerada pelo agente.
+        normalized_input: Texto normalizado enviado ao agente.
+        media_processing_status: Resultado do pré-processamento de mídia.
+        media_processing_error: Erro do pré-processamento de mídia, se houver.
     """
     async with pool.connection() as conn:
         await conn.execute(
@@ -237,11 +248,20 @@ async def mark_done(
             UPDATE message_queue
             SET status = 'done',
                 response = %s,
+                normalized_input = COALESCE(%s, normalized_input),
+                media_processing_status = COALESCE(%s, media_processing_status),
+                media_processing_error = COALESCE(%s, media_processing_error),
                 processed_at = NOW(),
                 updated_at = NOW()
             WHERE id = %s
             """,
-            (response, message_id),
+            (
+                response,
+                normalized_input,
+                media_processing_status,
+                media_processing_error,
+                message_id,
+            ),
         )
         await conn.commit()
 

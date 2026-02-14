@@ -30,6 +30,21 @@ router = APIRouter(tags=["webhook"])
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
 
+def _form_str(form, key: str) -> str:
+    """Lê valor string do form com fallback para vazio."""
+    value = form.get(key)
+    return str(value) if value is not None else ""
+
+
+def _form_opt_str(form, key: str) -> str | None:
+    """Lê valor opcional string do form."""
+    value = form.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 @router.post("/webhook/twilio")
 async def webhook_twilio(
     request: Request,
@@ -59,16 +74,20 @@ async def webhook_twilio(
     form = await request.form()
 
     # Extrai campos como string (form data do Twilio é sempre texto)
-    phone_number = str(form.get("From", "")).replace("whatsapp:", "")
-    body = str(form.get("Body", ""))
-    to_number = str(form.get("To", "")).replace("whatsapp:", "")
-    message_sid = str(form.get("MessageSid", ""))
+    phone_number = _form_str(form, "From").replace("whatsapp:", "")
+    body = _form_str(form, "Body")
+    to_number = _form_str(form, "To").replace("whatsapp:", "")
+    message_sid = _form_str(form, "MessageSid")
 
     # Mídia (imagem, áudio)
-    num_media = int(str(form.get("NumMedia", "0")))
-    media_url: str | None = str(form.get("MediaUrl0")) if num_media > 0 else None
+    num_media_raw = _form_str(form, "NumMedia")
+    try:
+        num_media = int(num_media_raw or "0")
+    except ValueError:
+        num_media = 0
+    media_url: str | None = _form_opt_str(form, "MediaUrl0") if num_media > 0 else None
     media_type: str | None = (
-        str(form.get("MediaContentType0")) if num_media > 0 else None
+        _form_opt_str(form, "MediaContentType0") if num_media > 0 else None
     )
 
     # Rate limit

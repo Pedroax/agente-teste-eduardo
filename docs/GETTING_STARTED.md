@@ -24,6 +24,7 @@ Edite `.env` e configure no mínimo:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MIDIA_MODEL=google/gemini-2.5-flash-lite
 ```
 
 ## 2. Trilha A: desenvolvimento de agente no Studio
@@ -192,4 +193,5 @@ grep OPENROUTER_API_KEY .env
 
 - [Arquitetura](ARCHITECTURE.md)
 - [Criando Agentes](ADDING_AGENTS.md)
+- [Banco de Dados](DATABASE.md)
 - [Deploy](DEPLOY.md)

@@ -102,8 +102,10 @@ async def get_chat_messages(
     async with pool.connection() as conn:
         cursor = await conn.execute(
             """
-            SELECT id, agent_id, incoming_message, response, status,
-                   created_at, processed_at, error
+            SELECT id, agent_id, incoming_message, media_type,
+                   normalized_input, media_processing_status,
+                   response, status, created_at, processed_at,
+                   media_processing_error, error
             FROM message_queue
             WHERE phone_number = %s
             ORDER BY created_at DESC
@@ -118,11 +120,15 @@ async def get_chat_messages(
             "id": row[0],
             "agent_id": row[1],
             "incoming_message": row[2],
-            "response": row[3],
-            "status": row[4],
-            "created_at": row[5].isoformat() if row[5] else None,
-            "processed_at": row[6].isoformat() if row[6] else None,
-            "error": row[7],
+            "media_type": row[3],
+            "normalized_input": row[4],
+            "media_processing_status": row[5],
+            "response": row[6],
+            "status": row[7],
+            "created_at": row[8].isoformat() if row[8] else None,
+            "processed_at": row[9].isoformat() if row[9] else None,
+            "media_processing_error": row[10],
+            "error": row[11],
         }
         for row in rows
     ]

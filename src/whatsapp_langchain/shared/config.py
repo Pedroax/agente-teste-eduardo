@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     openrouter_api_key: SecretStr | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "x-ai/grok-4.1-fast"
+    # Modelo dedicado ao pré-processamento de mídia (imagem/áudio)
+    openrouter_midia_model: str = "google/gemini-2.5-flash-lite"
 
     # --- LLM Rate Limit ---
     llm_rate_limit_requests_per_second: float = 0.5

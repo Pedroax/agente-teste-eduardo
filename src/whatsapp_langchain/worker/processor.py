@@ -13,6 +13,7 @@ Uso:
 """
 
 import structlog
+from langchain_core.messages import HumanMessage
 from langchain_openai import OpenAIEmbeddings
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
@@ -28,7 +29,10 @@ from whatsapp_langchain.shared.queue import (
     mark_failed,
     upsert_conversation,
 )
-from whatsapp_langchain.worker.media import build_human_message
+from whatsapp_langchain.worker.media import (
+    AUTO_RESPONSE_MEDIA_FAILURE,
+    preprocess_incoming_message,
+)
 
 logger = structlog.get_logger()
 
@@ -55,12 +59,41 @@ async def process_message(
     )
 
     try:
-        # 1. Construir HumanMessage (com mídia se houver)
-        human_message = await build_human_message(
+        # 1. Pré-processar entrada (mídia -> texto) antes do agente
+        pre = await preprocess_incoming_message(
             body=message.incoming_message,
             media_url=message.media_url,
             media_type=message.media_type,
         )
+
+        # Se mídia está desabilitada ou falhou, não chama o agente
+        if not pre.should_invoke_agent:
+            auto_response = pre.auto_response or AUTO_RESPONSE_MEDIA_FAILURE
+            await mark_done(
+                pool,
+                message.id,
+                auto_response,
+                normalized_input=None,
+                media_processing_status=pre.media_processing_status,
+                media_processing_error=pre.media_processing_error,
+            )
+            await upsert_conversation(
+                pool,
+                phone_number=message.phone_number,
+                agent_id=message.agent_id,
+                last_message=auto_response,
+            )
+            logger.info(
+                "message_auto_responded",
+                message_id=message.id,
+                phone=message.phone_number,
+                agent_id=message.agent_id,
+                media_status=pre.media_processing_status,
+            )
+            return
+
+        normalized_text = pre.normalized_text or message.incoming_message
+        human_message = HumanMessage(content=normalized_text)
 
         # 2. Carregar agente com checkpointer + store PostgreSQL
         # from_conn_string é async context manager: cria conexão
@@ -127,7 +160,14 @@ async def process_message(
         response_text = result["messages"][-1].content
 
         # 5. Salvar resultado
-        await mark_done(pool, message.id, response_text)
+        await mark_done(
+            pool,
+            message.id,
+            response_text,
+            normalized_input=pre.normalized_text,
+            media_processing_status=pre.media_processing_status,
+            media_processing_error=pre.media_processing_error,
+        )
         await upsert_conversation(
             pool,
             phone_number=message.phone_number,

@@ -141,6 +141,7 @@ Para detalhes técnicos:
 - [Arquitetura](docs/ARCHITECTURE.md)
 - [Primeiros Passos](docs/GETTING_STARTED.md)
 - [Criando Agentes](docs/ADDING_AGENTS.md)
+- [Banco de Dados](docs/DATABASE.md)
 - [Deploy](docs/DEPLOY.md)
 
 ## Comandos úteis

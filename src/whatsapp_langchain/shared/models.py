@@ -43,6 +43,9 @@ class MessageQueue(BaseModel):
     incoming_message: str
     media_url: str | None = None
     media_type: str | None = None
+    normalized_input: str | None = None
+    media_processing_status: str | None = None
+    media_processing_error: str | None = None
     status: MessageStatus = MessageStatus.QUEUED
     process_after: datetime | None = None
     attempts: int = 0
