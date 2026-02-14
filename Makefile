@@ -1,4 +1,4 @@
-.PHONY: help dev setup db migrate api worker frontend up down reset logs lint format format-check fix typecheck check ci test test-x test-v clean
+.PHONY: help dev setup db migrate api worker frontend up down reset logs lint format format-check fix typecheck check ci test test-x test-v test-demo test-demo-up clean
 
 # Cores para output
 CYAN := \033[36m
@@ -75,17 +75,24 @@ check: ## Verifica tudo (lint + format + types) — não altera arquivos
 	uv run ruff check . && uv run ruff format --check . && uv run pyright src/
 
 ci: ## CI/CD: verifica tudo + roda testes — não altera arquivos
-	uv run ruff check . && uv run ruff format --check . && uv run pyright src/ && uv run pytest
+	uv run ruff check . && uv run ruff format --check . && uv run pyright src/ && uv run pytest -m "not docker_demo"
 
 ##@ Testes
 test: ## Roda todos os testes
-	uv run pytest
+	uv run pytest -m "not docker_demo"
 
 test-x: ## Roda testes, para no primeiro erro
-	uv run pytest -x
+	uv run pytest -x -m "not docker_demo"
 
 test-v: ## Roda testes com output verboso
-	uv run pytest -v
+	uv run pytest -v -m "not docker_demo"
+
+test-demo: ## Roda testes demonstrativos (requer stack Docker rodando)
+	uv run pytest -m docker_demo -v
+
+test-demo-up: ## Sobe stack Docker e roda testes demonstrativos
+	docker compose up -d --build
+	uv run pytest -m docker_demo -v
 
 ##@ Limpeza
 clean: ## Remove arquivos de cache do Python

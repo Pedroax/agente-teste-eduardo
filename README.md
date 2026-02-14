@@ -154,6 +154,7 @@ make test
 make check
 make logs
 make reset
+make test-demo
 ```
 
 ## Roadmap

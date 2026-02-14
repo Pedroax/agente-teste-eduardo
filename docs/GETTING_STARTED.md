@@ -53,6 +53,14 @@ Isso sobe:
 - `api` (FastAPI)
 - `worker` (consumidor da fila)
 
+### Reset completo do ambiente Docker
+
+Para reiniciar do zero (incluindo volume do PostgreSQL e dados):
+
+```bash
+make reset
+```
+
 ### Validar saúde
 
 ```bash
@@ -142,6 +150,17 @@ make test-v
 make lint
 make format
 make typecheck
+```
+
+### Testes demonstrativos (com Docker)
+
+Esses testes validam features de demonstração (imagem, áudio e memória semântica)
+no fluxo real da stack Docker.
+
+```bash
+make test-demo
+# ou:
+make test-demo-up
 ```
 
 ## 7. Troubleshooting
