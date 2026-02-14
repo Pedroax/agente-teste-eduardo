@@ -18,6 +18,26 @@ from pydantic import SecretStr
 
 from whatsapp_langchain.shared.config import settings
 
+_RATE_LIMITERS: dict[tuple[float, int], InMemoryRateLimiter] = {}
+
+
+def _get_rate_limiter(
+    requests_per_second: float,
+    max_bucket_size: int,
+) -> InMemoryRateLimiter:
+    """Retorna limiter compartilhado por configuração.
+
+    Reusa a mesma instância entre modelos com os mesmos parâmetros para que
+    o bucket represente o throughput real do processo (e não de uma chamada).
+    """
+    key = (requests_per_second, max_bucket_size)
+    if key not in _RATE_LIMITERS:
+        _RATE_LIMITERS[key] = InMemoryRateLimiter(
+            requests_per_second=requests_per_second,
+            max_bucket_size=max_bucket_size,
+        )
+    return _RATE_LIMITERS[key]
+
 
 def create_chat_model(
     model: str | None = None,
@@ -39,7 +59,7 @@ def create_chat_model(
     api_key = settings.openrouter_api_key
     secret_key = SecretStr(api_key.get_secret_value()) if api_key else None
 
-    rate_limiter = InMemoryRateLimiter(
+    rate_limiter = _get_rate_limiter(
         requests_per_second=settings.llm_rate_limit_requests_per_second,
         max_bucket_size=settings.llm_rate_limit_max_burst,
     )

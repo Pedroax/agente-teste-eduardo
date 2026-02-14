@@ -275,6 +275,7 @@ async def mark_failed(
             # Ainda tem tentativas: volta para a fila com backoff progressivo
             # Cada tentativa espera attempts * 5s antes de ser reprocessada
             backoff_seconds = row[0] * 5
+            next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
             await conn.execute(
                 """
                 UPDATE message_queue
@@ -293,6 +294,7 @@ async def mark_failed(
                 attempt=row[0],
                 max_attempts=row[1],
                 backoff_seconds=backoff_seconds,
+                next_retry_at=next_retry_at.isoformat(),
                 error=error,
             )
         else:

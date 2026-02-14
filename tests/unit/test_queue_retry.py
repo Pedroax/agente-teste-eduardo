@@ -6,7 +6,8 @@ gerado via mock do pool.
 """
 
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -100,3 +101,19 @@ class TestRetryBackoff:
         assert 1 * 5 == 5  # 1a tentativa: 5s
         assert 2 * 5 == 10  # 2a tentativa: 10s
         assert 3 * 5 == 15  # 3a tentativa: 15s
+
+    async def test_retry_log_contains_next_retry_at(self, mock_pool):
+        """Log de retry deve incluir o timestamp da próxima tentativa."""
+        pool, conn = mock_pool
+
+        cursor = AsyncMock()
+        cursor.fetchone = AsyncMock(return_value=(1, 3))
+        conn.execute = AsyncMock(return_value=cursor)
+
+        with patch("whatsapp_langchain.shared.queue.logger.warning") as mock_warning:
+            await mark_failed(pool, message_id=42, error="timeout")
+
+        assert mock_warning.called
+        kwargs = mock_warning.call_args.kwargs
+        assert "next_retry_at" in kwargs
+        datetime.fromisoformat(kwargs["next_retry_at"])

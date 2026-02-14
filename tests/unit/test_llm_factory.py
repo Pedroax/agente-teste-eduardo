@@ -48,3 +48,9 @@ class TestCreateChatModel:
 
         model = create_chat_model()
         assert model.openai_api_base == settings.openrouter_base_url
+
+    def test_reuses_limiter_for_same_settings(self):
+        """Modelos com mesma config devem compartilhar o mesmo limiter."""
+        model_a = create_chat_model(model="m1")
+        model_b = create_chat_model(model="m2")
+        assert model_a.rate_limiter is model_b.rate_limiter
