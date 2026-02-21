@@ -1,4 +1,4 @@
-.PHONY: help dev setup db migrate api worker frontend up down reset logs lint format format-check fix typecheck check ci test test-x test-v test-demo test-demo-up clean
+.PHONY: help dev setup db migrate api worker frontend up down reset logs lint format format-check fix typecheck check ci test test-x test-v test-demo test-demo-up test-flows clean
 
 # Cores para output
 CYAN := \033[36m
@@ -93,6 +93,9 @@ test-demo: ## Roda testes demonstrativos (requer stack Docker rodando)
 test-demo-up: ## Sobe stack Docker e roda testes demonstrativos
 	docker compose up -d --build
 	uv run pytest -m docker_demo -v
+
+test-flows: ## Roda testes de fluxo realista (requer stack Docker)
+	uv run pytest tests/integration/test_realistic_flows.py -v -s
 
 ##@ Limpeza
 clean: ## Remove arquivos de cache do Python

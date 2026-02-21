@@ -13,9 +13,10 @@ import structlog
 
 from whatsapp_langchain.shared.config import settings
 from whatsapp_langchain.shared.db import (
-    bootstrap_langgraph_schema,
     close_pool,
     get_pool,
+    open_checkpointer,
+    open_store,
     run_migrations,
 )
 from whatsapp_langchain.shared.observability import setup_logging
@@ -38,8 +39,18 @@ async def main() -> None:
 
     pool = await get_pool()
     await run_migrations(pool)
-    await bootstrap_langgraph_schema()
-    logger.info("worker_ready", poll_interval=settings.poll_interval_seconds)
+    checkpointer_stack, checkpointer = await open_checkpointer()
+    await checkpointer.setup()
+
+    store_stack, store = await open_store()
+    if store:
+        await store.setup()
+
+    logger.info(
+        "worker_ready",
+        poll_interval=settings.poll_interval_seconds,
+        memory_enabled=store is not None,
+    )
 
     try:
         while True:
@@ -49,11 +60,19 @@ async def main() -> None:
                 await asyncio.sleep(settings.poll_interval_seconds)
                 continue
 
-            await process_message(message, pool)
+            await process_message(
+                message,
+                pool,
+                checkpointer=checkpointer,
+                store=store,
+            )
 
     except KeyboardInterrupt:
         logger.info("worker_interrupted")
     finally:
+        if store_stack is not None:
+            await store_stack.aclose()
+        await checkpointer_stack.aclose()
         await close_pool()
         logger.info("worker_stopped")
 

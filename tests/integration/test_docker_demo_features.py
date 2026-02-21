@@ -11,13 +11,12 @@ Pré-requisito:
 
 from __future__ import annotations
 
-import os
 import threading
-import time
 import uuid
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import httpx
 import psycopg
@@ -27,47 +26,35 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.store.postgres.base import PostgresIndexConfig
 from pydantic import SecretStr
 
+from whatsapp_langchain.agents.tools import read_memory, save_memory
 from whatsapp_langchain.shared.config import settings
+
+from .helpers import (
+    API_BASE_URL,
+    clear_thread_checkpoints,
+    get_db_url,
+    wait_memory_saved,
+    wait_terminal_status,
+)
 
 pytestmark = pytest.mark.docker_demo
 
-DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5432/whatsapp_langchain"
-API_BASE_URL = "http://localhost:8000"
 ASSETS_DIR = Path(__file__).parents[1] / "assets"
 
-
-def _get_db_url() -> str:
-    return os.getenv("DATABASE_URL", DEFAULT_DB_URL)
-
-
-def _query_message_status(db_url: str, message_sid: str) -> tuple | None:
-    with psycopg.connect(db_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT status, response, error, media_type
-                FROM message_queue
-                WHERE message_id = %s
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (message_sid,),
-            )
-            return cur.fetchone()
+save_memory_fn = save_memory.coroutine
+read_memory_fn = read_memory.coroutine
 
 
-def _wait_terminal_status(
-    db_url: str,
-    message_sid: str,
-    timeout_seconds: int = 90,
-) -> tuple:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        row = _query_message_status(db_url, message_sid)
-        if row and row[0] in {"done", "failed"}:
-            return row
-        time.sleep(1)
-    raise AssertionError(f"Mensagem {message_sid} não finalizou em {timeout_seconds}s")
+def _make_tool_runtime(user_id: str) -> MagicMock:
+    """Cria runtime fake no formato do webhook (configurable.user_id)."""
+    runtime = MagicMock()
+    runtime.config = {
+        "configurable": {
+            "user_id": user_id,
+            "thread_id": f"{user_id}:rhawk_assistant",
+        }
+    }
+    return runtime
 
 
 @pytest.fixture(scope="module")
@@ -80,7 +67,7 @@ def ensure_docker_stack() -> str:
     except Exception:
         pytest.skip("API não acessível. Rode: docker compose up -d --build")
 
-    db_url = _get_db_url()
+    db_url = get_db_url()
     try:
         with psycopg.connect(db_url) as conn:
             with conn.cursor() as cur:
@@ -142,7 +129,7 @@ def test_demo_webhook_image_e2e(
     )
     assert response.status_code == 200
 
-    status, output, error, media_type = _wait_terminal_status(ensure_docker_stack, sid)
+    status, output, error, media_type = wait_terminal_status(ensure_docker_stack, sid)
     assert media_type == "image/png"
     assert status == "done", f"Processamento de imagem falhou: {error}"
     assert output and output.strip()
@@ -171,7 +158,7 @@ def test_demo_webhook_audio_e2e(
     )
     assert response.status_code == 200
 
-    status, output, error, media_type = _wait_terminal_status(ensure_docker_stack, sid)
+    status, output, error, media_type = wait_terminal_status(ensure_docker_stack, sid)
     assert media_type == "audio/ogg"
     assert status == "done", f"Processamento de áudio falhou: {error}"
     assert output and output.strip()
@@ -179,7 +166,11 @@ def test_demo_webhook_audio_e2e(
 
 @pytest.mark.asyncio
 async def test_demo_semantic_memory_roundtrip(ensure_docker_stack: str):
-    """Demonstra gravação e busca semântica no Postgres Store."""
+    """Demonstra roundtrip de memória por usuário no Postgres Store.
+
+    O namespace segue o contrato do projeto: (user_id, "memories"),
+    onde user_id é o telefone (mesmo identificador vindo do payload Twilio).
+    """
     api_key = settings.openrouter_api_key
     if not api_key:
         pytest.skip("OPENROUTER_API_KEY não configurada")
@@ -195,30 +186,111 @@ async def test_demo_semantic_memory_roundtrip(ensure_docker_stack: str):
         "fields": ["$"],
     }
 
-    namespace = (f"demo-user-{uuid.uuid4().hex[:8]}", "memories")
+    user_id = f"+55{uuid.uuid4().int % 10**11:011d}"
+    runtime = _make_tool_runtime(user_id)
 
     async with AsyncPostgresStore.from_conn_string(
         ensure_docker_stack,
         index=index_config,
     ) as store:
         await store.setup()
-        await store.aput(
-            namespace,
-            "m1",
-            {"memory": "Meu nome é Ronnald e eu estudo sistemas de agentes."},
+        save_result = await save_memory_fn(
+            "Meu nome é Ronnald e eu estudo sistemas de agentes.",
+            runtime=runtime,
+            store=store,
         )
-        await store.aput(
-            namespace,
-            "m2",
-            {"memory": "Prefiro exemplos práticos com testes automatizados."},
+        assert "sucesso" in save_result.lower()
+
+        await save_memory_fn(
+            "Prefiro exemplos práticos com testes automatizados.",
+            runtime=runtime,
+            store=store,
         )
 
-        results = await store.asearch(
-            namespace,
-            query="Qual é o meu nome?",
-            limit=5,
+        read_result = await read_memory_fn(
+            "Qual é o meu nome?",
+            runtime=runtime,
+            store=store,
         )
 
-    assert results
-    recovered = " ".join(str(r.value.get("memory", "")).lower() for r in results)
-    assert "ronnald" in recovered
+        assert "memórias relevantes" in read_result.lower()
+        assert "ronnald" in read_result.lower()
+
+    with psycopg.connect(ensure_docker_stack) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM store
+                WHERE prefix = %s
+                """,
+                (f"{user_id}.memories",),
+            )
+            row = cur.fetchone()
+            assert row and row[0] >= 2
+
+
+def test_demo_webhook_memory_recall_e2e(ensure_docker_stack: str):
+    """E2E via webhook: salva memória e recupera sem histórico de thread.
+
+    Fluxo:
+    1) Mensagem A força o agente a salvar um fato único no store.
+    2) Teste limpa checkpoints da thread para remover contexto conversacional.
+    3) Mensagem B pede recall explícito via read_memory.
+    4) Resposta final deve conter o fato salvo.
+    """
+    phone = f"+5531{uuid.uuid4().int % 10**8:08d}"
+    thread_id = f"{phone}:rhawk_assistant"
+    token = f"codex-{uuid.uuid4().hex[:10]}"
+
+    sid_save = f"SMMEM{uuid.uuid4().hex[:12]}"
+    save_response = httpx.post(
+        f"{API_BASE_URL}/webhook/twilio?agent=rhawk_assistant",
+        data={
+            "MessageSid": sid_save,
+            "From": f"whatsapp:{phone}",
+            "To": "whatsapp:+14155238886",
+            "Body": (
+                "Use a ferramenta save_memory e salve este fato sobre mim: "
+                f"meu identificador secreto é {token}. "
+                "Depois confirme em uma frase curta."
+            ),
+            "NumMedia": "0",
+        },
+        timeout=10,
+    )
+    assert save_response.status_code == 200
+
+    status_a, output_a, error_a, _ = wait_terminal_status(ensure_docker_stack, sid_save)
+    assert status_a == "done", f"Falha ao salvar memória: {error_a}"
+    assert output_a and output_a.strip()
+
+    wait_memory_saved(ensure_docker_stack, phone, contains=token)
+
+    # Remove histórico da thread para impedir recuperação via checkpointer.
+    clear_thread_checkpoints(ensure_docker_stack, thread_id)
+
+    sid_recall = f"SMMEM{uuid.uuid4().hex[:12]}"
+    recall_response = httpx.post(
+        f"{API_BASE_URL}/webhook/twilio?agent=rhawk_assistant",
+        data={
+            "MessageSid": sid_recall,
+            "From": f"whatsapp:{phone}",
+            "To": "whatsapp:+14155238886",
+            "Body": (
+                "Sem usar save_memory agora, use read_memory para recuperar "
+                "meu identificador secreto e responda apenas com o valor."
+            ),
+            "NumMedia": "0",
+        },
+        timeout=10,
+    )
+    assert recall_response.status_code == 200
+
+    status_b, output_b, error_b, _ = wait_terminal_status(
+        ensure_docker_stack,
+        sid_recall,
+    )
+    assert status_b == "done", f"Falha no recall de memória: {error_b}"
+    assert output_b and output_b.strip()
+    assert token.lower() in output_b.lower()

@@ -11,7 +11,7 @@ Uso:
 """
 
 import structlog
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Form, Query, Response
 
 from whatsapp_langchain.agents.loader import AgentNotFoundError, list_agents
 from whatsapp_langchain.server.dependencies import (
@@ -30,26 +30,45 @@ router = APIRouter(tags=["webhook"])
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
 
-def _form_str(form, key: str) -> str:
-    """Lê valor string do form com fallback para vazio."""
-    value = form.get(key)
-    return str(value) if value is not None else ""
-
-
-def _form_opt_str(form, key: str) -> str | None:
-    """Lê valor opcional string do form."""
-    value = form.get(key)
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
 @router.post("/webhook/twilio")
 async def webhook_twilio(
-    request: Request,
     agent: str = Query(
         description="ID do agente para processar a mensagem",
+    ),
+    message_sid: str = Form(
+        default="",
+        alias="MessageSid",
+        description="ID da mensagem no Twilio (MessageSid).",
+    ),
+    from_number: str = Form(
+        default="",
+        alias="From",
+        description="Número remetente no formato whatsapp:+55...",
+    ),
+    to_number_form: str = Form(
+        default="",
+        alias="To",
+        description="Número de destino no formato whatsapp:+...",
+    ),
+    body: str = Form(
+        default="",
+        alias="Body",
+        description="Texto da mensagem (pode ser vazio em mensagens de mídia).",
+    ),
+    num_media_raw: str = Form(
+        default="0",
+        alias="NumMedia",
+        description="Quantidade de mídias anexadas.",
+    ),
+    media_url_form: str | None = Form(
+        default=None,
+        alias="MediaUrl0",
+        description="URL da primeira mídia (quando NumMedia > 0).",
+    ),
+    media_type_form: str | None = Form(
+        default=None,
+        alias="MediaContentType0",
+        description="MIME type da primeira mídia.",
     ),
     _signature: None = Depends(validate_twilio_signature),
 ) -> Response:
@@ -59,7 +78,6 @@ async def webhook_twilio(
     e salvar a resposta no banco. O envio via Twilio será na Fase 4.
 
     Args:
-        request: Request com form data do Twilio.
         agent: ID do agente (query param).
 
     Returns:
@@ -70,25 +88,19 @@ async def webhook_twilio(
     if agent not in available_agents:
         raise AgentNotFoundError(agent)
 
-    # Parse do form data do Twilio
-    form = await request.form()
-
-    # Extrai campos como string (form data do Twilio é sempre texto)
-    phone_number = _form_str(form, "From").replace("whatsapp:", "")
-    body = _form_str(form, "Body")
-    to_number = _form_str(form, "To").replace("whatsapp:", "")
-    message_sid = _form_str(form, "MessageSid")
+    # Sanitização de campos do Twilio recebidos via x-www-form-urlencoded
+    phone_number = (from_number or "").replace("whatsapp:", "")
+    body = body or ""
+    to_number = (to_number_form or "").replace("whatsapp:", "")
+    message_sid = message_sid or ""
 
     # Mídia (imagem, áudio)
-    num_media_raw = _form_str(form, "NumMedia")
     try:
         num_media = int(num_media_raw or "0")
     except ValueError:
         num_media = 0
-    media_url: str | None = _form_opt_str(form, "MediaUrl0") if num_media > 0 else None
-    media_type: str | None = (
-        _form_opt_str(form, "MediaContentType0") if num_media > 0 else None
-    )
+    media_url = media_url_form.strip() if (num_media > 0 and media_url_form) else None
+    media_type = media_type_form.strip() if (num_media > 0 and media_type_form) else None
 
     # Rate limit
     await check_rate_limit(phone_number)

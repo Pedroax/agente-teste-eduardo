@@ -105,6 +105,61 @@ curl http://localhost:8000/api/chats
 curl http://localhost:8000/api/chats/+5511999999999
 ```
 
+### 4.2.1 Teste manual no Swagger (`/docs`)
+
+1. Abra `http://localhost:8000/docs`.
+2. Execute `GET /api/agents` e confirme `rhawk_assistant`.
+3. Abra `POST /webhook/twilio` e clique em `Try it out`.
+4. Preencha:
+   - `agent` (query): `rhawk_assistant`
+   - `MessageSid`: `SMDOCS001`
+   - `From`: `whatsapp:+5511999999999`
+   - `To`: `whatsapp:+14155238886`
+   - `Body`: `Mensagem de teste via Swagger`
+   - `NumMedia`: `0`
+5. Execute e verifique:
+   - resposta `200` com TwiML vazio
+   - dados em `GET /api/chats/+5511999999999`
+
+### 4.3 Teste de memória semântica (save + recall via tools)
+
+1. Envie uma mensagem pedindo para salvar um fato:
+
+```bash
+curl -X POST "http://localhost:8000/webhook/twilio?agent=rhawk_assistant" \
+  -d "MessageSid=SMMEM001" \
+  -d "From=whatsapp:+5511999999999" \
+  -d "To=whatsapp:+14155238886" \
+  -d "Body=Use a ferramenta save_memory e salve este fato: meu código é codex-12345" \
+  -d "NumMedia=0"
+```
+
+2. Envie outra mensagem pedindo recall explícito:
+
+```bash
+curl -X POST "http://localhost:8000/webhook/twilio?agent=rhawk_assistant" \
+  -d "MessageSid=SMMEM002" \
+  -d "From=whatsapp:+5511999999999" \
+  -d "To=whatsapp:+14155238886" \
+  -d "Body=Sem salvar nada novo agora, use read_memory e me diga meu código" \
+  -d "NumMedia=0"
+```
+
+3. Verifique evidências no banco:
+
+```sql
+SELECT prefix, value->>'memory' AS memory, updated_at
+FROM store
+WHERE prefix = '+5511999999999.memories'
+ORDER BY updated_at DESC;
+
+SELECT id, message_id, status, response
+FROM message_queue
+WHERE phone_number = '+5511999999999'
+ORDER BY id DESC
+LIMIT 5;
+```
+
 ## 5. Configurações importantes (.env)
 
 ### Contexto
@@ -121,9 +176,17 @@ SUMMARIZE_MODEL=x-ai/grok-4.1-fast
 
 ```bash
 MEMORY_ENABLED=true
-EMBEDDING_MODEL=openai/text-embedding-3-small
-EMBEDDING_DIMS=1536
+# Use o modelo de embedding que está ativo no seu .env
+# (deve bater com as dimensões abaixo)
+EMBEDDING_MODEL=<modelo-de-embedding-em-uso>
+EMBEDDING_DIMS=<dims-do-modelo>
 MEMORY_SEARCH_LIMIT=5
+```
+
+Para evitar divergência de documentação vs ambiente, confirme os valores ativos:
+
+```bash
+grep -E '^EMBEDDING_MODEL|^EMBEDDING_DIMS' .env
 ```
 
 ### Operação da fila

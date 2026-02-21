@@ -14,7 +14,7 @@ Incluído:
 - fila em PostgreSQL
 - execução de agente no worker
 - contexto por checkpointer
-- memória semântica por store
+- memória semântica por store com tools (`save_memory` e `read_memory`)
 - rotas administrativas e health check
 
 Ainda não incluído como fluxo completo de produção:
@@ -86,6 +86,7 @@ docker compose logs -f api worker db
 - health check responde 200
 - `message_queue` recebe mensagens
 - worker faz transição `queued -> processing -> done|failed`
+- memória semântica persiste em `store` com prefixo `<phone_number>.memories`
 - retries acontecem quando há erro transitório
 - métricas administrativas retornam dados
 - logs estruturados habilitados (`LOG_JSON=true` em produção)

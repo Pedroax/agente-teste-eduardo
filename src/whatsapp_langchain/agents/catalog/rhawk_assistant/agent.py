@@ -23,7 +23,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
 from whatsapp_langchain.agents.middleware import get_context_middleware
-from whatsapp_langchain.agents.tools import save_memory
+from whatsapp_langchain.agents.tools import read_memory, save_memory
 from whatsapp_langchain.shared.llm import create_chat_model
 
 from .prompts import SYSTEM_PROMPT
@@ -58,11 +58,10 @@ def build_graph(
     model = create_chat_model()
 
     # Middleware de contexto baseado em CONTEXT_STRATEGY
-    # Inclui recall de memórias se MEMORY_ENABLED=true
     middleware = get_context_middleware()
 
-    # Tools de memória — só disponibiliza save_memory se store existe
-    tools = [save_memory] if store else []
+    # Tools de memória — só disponibiliza quando store existe
+    tools = [save_memory, read_memory] if store else []
 
     return create_agent(
         model=model,

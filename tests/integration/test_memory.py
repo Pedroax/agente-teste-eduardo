@@ -17,8 +17,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
 from pydantic import SecretStr
 
-from whatsapp_langchain.agents.middleware import get_context_middleware
-from whatsapp_langchain.agents.tools import save_memory
+from whatsapp_langchain.agents.tools import read_memory, save_memory
 
 load_dotenv()
 
@@ -45,19 +44,17 @@ class TestMemorySaveAndRecall:
         store = InMemoryStore()
         checkpointer = MemorySaver()
 
-        # Desabilita memory recall (sem embeddings no InMemoryStore)
-        # mas habilita a tool save_memory via store
-        middleware = get_context_middleware(strategy="none", memory_enabled=False)
-
         agent = create_agent(
             model=model,
-            tools=[save_memory],
+            tools=[save_memory, read_memory],
             system_prompt=(
                 "Você é um assistente. Quando o usuário disser algo "
                 "importante sobre si mesmo (nome, preferências), "
-                "use save_memory para salvar. Responda brevemente."
+                "use save_memory para salvar. "
+                "Quando precisar lembrar algo do usuário, use read_memory. "
+                "Responda brevemente."
             ),
-            middleware=middleware,
+            middleware=[],
             checkpointer=checkpointer,
             store=store,
         )
@@ -92,17 +89,16 @@ class TestMemorySaveAndRecall:
         store = InMemoryStore()
         checkpointer = MemorySaver()
 
-        middleware = get_context_middleware(strategy="none", memory_enabled=False)
-
         agent = create_agent(
             model=model,
-            tools=[save_memory],
+            tools=[save_memory, read_memory],
             system_prompt=(
                 "Você é um assistente. Sempre use save_memory para "
-                "salvar informações pessoais do usuário. "
+                "salvar informações pessoais do usuário e use read_memory "
+                "quando precisar recuperar essas informações. "
                 "Responda em uma frase curta."
             ),
-            middleware=middleware,
+            middleware=[],
             checkpointer=checkpointer,
             store=store,
         )

@@ -13,7 +13,8 @@ Implementado:
 - execução de agentes via loader dinâmico
 - checkpointer PostgreSQL (contexto por `thread_id`)
 - store semântico PostgreSQL (memória por `user_id`)
-- middleware de contexto (`trim`, `summarize`, `none`) e recall de memória
+- middleware de contexto (`trim`, `summarize`, `none`)
+- memória semântica orientada a tools (`save_memory` e `read_memory`)
 - processamento de mídia (imagem e áudio) via OpenRouter
 - retry com backoff progressivo e status de falha
 - APIs administrativas para inspeção
@@ -71,13 +72,13 @@ Contratos relevantes:
 Responsabilidades:
 - fazer polling da fila
 - processar mídia se existir
-- carregar agente com checkpointer/store
+- carregar agente com checkpointer/store compartilhados (abertos no boot)
 - invocar grafo com `thread_id` e `user_id`
 - persistir sucesso/falha
 
 Contrato de execução do agente:
 - `thread_id`: memória de conversa (checkpointer)
-- `user_id`: memória cross-thread (store semântico)
+- `user_id`: memória cross-thread (store semântico), derivado do telefone do webhook Twilio
 
 ### Shared (`src/whatsapp_langchain/shared/`)
 
@@ -124,8 +125,8 @@ Tabela agregada para consultas administrativas.
 5. Worker faz `claim_next` com lease.
 6. Worker monta `HumanMessage` (texto, imagem ou transcrição de áudio).
 7. Worker carrega agente com:
-   - `AsyncPostgresSaver` (checkpointer)
-   - `AsyncPostgresStore` + embeddings (quando memória habilitada)
+   - `AsyncPostgresSaver` (checkpointer) aberto no startup do worker
+   - `AsyncPostgresStore` + embeddings (quando memória habilitada), também aberto no startup
 8. Agente executa e retorna resposta.
 9. Worker persiste resultado (`mark_done`) e atualiza `conversations`.
 10. Em erro, `mark_failed` decide retry com backoff ou falha final.
@@ -140,7 +141,9 @@ Persistência de mensagens de uma conversa específica (`thread_id`).
 
 - namespace: `(user_id, "memories")`
 - `save_memory` grava fatos relevantes
-- middleware de recall busca por similaridade e injeta no contexto
+- `read_memory` recupera memórias por similaridade quando o agente precisar
+- `user_id` no runtime vem de `phone_number` (payload Twilio)
+- não usamos escopo `tenant_user`/`tenant_shared` neste projeto
 
 Isso separa duas necessidades diferentes:
 - continuidade da conversa atual
@@ -182,6 +185,7 @@ Logs estruturados com `structlog` em todos os componentes.
 - Loader dinâmico de agentes: facilita catálogo e extensibilidade.
 - Config centralizada: evita divergência de comportamento por módulo.
 - Middleware explícito: torna política de contexto auditável.
+- Memória por tools explícitas: separa contexto transiente (middleware) de memória durável (store).
 
 ## Próximos passos de arquitetura
 

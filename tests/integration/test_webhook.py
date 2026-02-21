@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from whatsapp_langchain import __version__
 from whatsapp_langchain.server.main import app
 
 client = TestClient(app, raise_server_exceptions=False)
@@ -46,7 +47,11 @@ class TestHealthCheck:
         """Retorna 200 quando o banco está acessível."""
         response = client.get("/health")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.json() == {
+            "status": "ok",
+            "database": "connected",
+            "version": __version__,
+        }
 
 
 class TestWebhookSync:
@@ -121,6 +126,25 @@ class TestWebhookTwilio:
         )
         assert response.status_code == 200
         assert "Response" in response.text
+
+    def test_twilio_openapi_exposes_form_fields(self):
+        """Swagger deve exibir body form-encoded para teste manual."""
+        openapi = client.get("/openapi.json").json()
+        post = openapi["paths"]["/webhook/twilio"]["post"]
+        assert "requestBody" in post
+
+        form_content = post["requestBody"]["content"]["application/x-www-form-urlencoded"]
+        schema = form_content["schema"]
+        if "$ref" in schema:
+            ref_name = schema["$ref"].split("/")[-1]
+            schema = openapi["components"]["schemas"][ref_name]
+
+        properties = schema["properties"]
+        assert "MessageSid" in properties
+        assert "From" in properties
+        assert "To" in properties
+        assert "Body" in properties
+        assert "NumMedia" in properties
 
 
 class TestAdminRoutes:

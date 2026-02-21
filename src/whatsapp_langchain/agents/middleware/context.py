@@ -8,13 +8,8 @@ Estratégias disponíveis:
     - summarize: Sumariza mensagens antigas (custo extra, preserva contexto)
     - none: Sem gerenciamento (para testes ou conversas curtas)
 
-Memória semântica:
-    - Se MEMORY_ENABLED=true, adiciona middleware de recall que busca
-      memórias salvas sobre o usuário antes de cada chamada ao LLM.
-
 Configuração via .env:
     CONTEXT_STRATEGY=trim              # trim | summarize | none
-    MEMORY_ENABLED=true                # Habilita recall de memórias
 
     # Para TRIM:
     TRIM_KEEP_TURNS=5                  # Turnos recentes a manter
@@ -39,7 +34,6 @@ Exemplo:
 
 from typing import Any
 
-from whatsapp_langchain.agents.middleware.memory import create_memory_middleware
 from whatsapp_langchain.agents.middleware.summarize import create_summarize_middleware
 from whatsapp_langchain.agents.middleware.trim import create_trim_middleware
 from whatsapp_langchain.shared.config import settings
@@ -48,7 +42,6 @@ from whatsapp_langchain.shared.llm import create_chat_model
 
 def get_context_middleware(
     strategy: str | None = None,
-    memory_enabled: bool | None = None,
     trim_keep_turns: int | None = None,
     summarize_trigger_tokens: int | None = None,
     summarize_keep_messages: int | None = None,
@@ -62,8 +55,6 @@ def get_context_middleware(
     Args:
         strategy: Estratégia de contexto (trim/summarize/none).
                   Default: settings.context_strategy.
-        memory_enabled: Habilita middleware de recall de memórias.
-                        Default: settings.memory_enabled.
         trim_keep_turns: Turnos recentes a manter no trim.
                          Default: settings.trim_keep_turns.
         summarize_trigger_tokens: Tokens antes de acionar sumarização.
@@ -87,16 +78,6 @@ def get_context_middleware(
         middlewares = get_context_middleware(strategy="trim", trim_keep_turns=3)
     """
     middlewares: list[Any] = []
-
-    # Memory recall middleware — roda ANTES do context management
-    # para que as memórias sejam incluídas antes do trim/summarize
-    resolved_memory = (
-        memory_enabled if memory_enabled is not None else settings.memory_enabled
-    )
-    if resolved_memory:
-        middlewares.append(
-            create_memory_middleware(search_limit=settings.memory_search_limit)
-        )
 
     # Context strategy (trim/summarize/none)
     resolved_strategy = strategy or settings.context_strategy

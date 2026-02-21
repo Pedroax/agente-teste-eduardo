@@ -21,9 +21,11 @@ Já implementado no código:
 - fila em PostgreSQL com debounce e retry
 - worker assíncrono para processamento LangGraph
 - bootstrap de schema LangGraph no startup (sem criação lazy no primeiro request)
+- ciclo de vida explícito no worker para `checkpointer`/`store` (abertos no boot e reutilizados)
 - checkpointer PostgreSQL (`thread_id`) para contexto por conversa
 - memória semântica com `AsyncPostgresStore` + embeddings (`user_id`)
 - middleware de contexto (`trim`, `summarize`, `none`)
+- tools de memória semântica (`save_memory` e `read_memory`)
 - processamento de mídia (imagem e áudio) via OpenRouter multimodal
 - rate limit por telefone (in-memory)
 - rotas administrativas (`/api/agents`, `/api/chats`, `/api/metrics`)

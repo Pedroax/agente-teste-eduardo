@@ -40,7 +40,7 @@ Responda em português brasileiro, de forma objetiva e útil."""
 
 ### 3. Implementar `build_graph`
 
-Use a factory central de LLM (`shared.llm.create_chat_model`) e middleware centralizado.
+Use a factory central de LLM (`shared.llm.create_chat_model`) e middleware centralizado de contexto.
 
 ```python
 # agent.py
@@ -49,7 +49,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
 from whatsapp_langchain.agents.middleware import get_context_middleware
-from whatsapp_langchain.agents.tools import save_memory
+from whatsapp_langchain.agents.tools import read_memory, save_memory
 from whatsapp_langchain.shared.llm import create_chat_model
 
 from .prompts import SYSTEM_PROMPT
@@ -61,7 +61,7 @@ def build_graph(
 ):
     model = create_chat_model()
     middleware = get_context_middleware()
-    tools = [save_memory] if store else []
+    tools = [save_memory, read_memory] if store else []
 
     return create_agent(
         model=model,
@@ -110,12 +110,12 @@ graph = build_graph(store=store)
 ### Memória cross-thread
 
 Quando `store` é fornecido:
-- tool `save_memory` pode persistir fatos do usuário
-- middleware de recall busca memórias semânticas antes da chamada ao modelo
+- tool `save_memory` persiste fatos relevantes do usuário
+- tool `read_memory` recupera memórias relevantes por busca semântica
 
 Para funcionar corretamente, o runtime precisa receber:
 - `thread_id` (conversa)
-- `user_id` (identidade do usuário)
+- `user_id` (identidade do usuário; neste projeto vem do telefone no payload do Twilio)
 
 Exemplo de `config` em invoke:
 
@@ -133,7 +133,8 @@ config={
 - mantenha prompts e regras de domínio em `prompts.py`
 - use tools apenas para efeitos externos/estado durável
 - evite lógica de infraestrutura dentro do agente
-- prefira middleware para políticas transversais (contexto, memória)
+- prefira middleware para políticas transversais de contexto
+- para memória semântica, use tools explícitas (`save_memory`/`read_memory`)
 - teste no Studio primeiro, depois no fluxo assíncrono API/Worker
 
 ## Checklist de revisão
@@ -141,5 +142,5 @@ config={
 - `build_graph` aceita `checkpointer` e `store`
 - agente carrega com `load_graph("meu_agente")`
 - contexto funciona com `CONTEXT_STRATEGY` escolhido
-- memória salva/recall funciona com `MEMORY_ENABLED=true`
+- memória save/recall via tools funciona com `MEMORY_ENABLED=true`
 - testes mínimos cobrindo criação e execução básica do agente

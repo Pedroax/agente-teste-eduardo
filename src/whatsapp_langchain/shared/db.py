@@ -13,6 +13,7 @@ Uso:
     await close_pool()
 """
 
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 import structlog
@@ -142,6 +143,51 @@ async def run_migrations(db_pool: AsyncConnectionPool) -> None:
             logger.info("migration_applied", migration=sql_file.name)
 
 
+def resolve_store_index_config() -> PostgresIndexConfig:
+    """Monta configuração de embeddings para o AsyncPostgresStore."""
+    api_key = settings.openrouter_api_key
+    secret_key = SecretStr(api_key.get_secret_value()) if api_key else None
+    embeddings = OpenAIEmbeddings(
+        model=settings.embedding_model,
+        base_url=settings.openrouter_base_url,
+        api_key=secret_key,
+    )
+
+    return {
+        "embed": embeddings,
+        "dims": settings.embedding_dims,
+        "fields": ["$"],
+    }
+
+
+async def open_checkpointer() -> tuple[AsyncExitStack, AsyncPostgresSaver]:
+    """Abre checkpointer PostgreSQL com ciclo de vida explícito."""
+    stack = AsyncExitStack()
+    checkpointer = await stack.enter_async_context(
+        AsyncPostgresSaver.from_conn_string(settings.database_url)
+    )
+    return stack, checkpointer
+
+
+async def open_store() -> tuple[AsyncExitStack, AsyncPostgresStore] | tuple[None, None]:
+    """Abre store vetorial condicionalmente.
+
+    O store só é criado quando MEMORY_ENABLED=true.
+    """
+    if not settings.memory_enabled:
+        logger.info("store_skipped", reason="memory_disabled")
+        return None, None
+
+    stack = AsyncExitStack()
+    store = await stack.enter_async_context(
+        AsyncPostgresStore.from_conn_string(
+            settings.database_url,
+            index=resolve_store_index_config(),
+        )
+    )
+    return stack, store
+
+
 async def bootstrap_langgraph_schema() -> None:
     """Inicializa tabelas do checkpointer/store do LangGraph no startup.
 
@@ -153,34 +199,17 @@ async def bootstrap_langgraph_schema() -> None:
         memory_enabled=settings.memory_enabled,
     )
 
-    if settings.memory_enabled:
-        api_key = settings.openrouter_api_key
-        secret_key = SecretStr(api_key.get_secret_value()) if api_key else None
-        embeddings = OpenAIEmbeddings(
-            model=settings.embedding_model,
-            base_url=settings.openrouter_base_url,
-            api_key=secret_key,
-        )
-        index_config: PostgresIndexConfig = {
-            "embed": embeddings,
-            "dims": settings.embedding_dims,
-            "fields": ["$"],
-        }
+    checkpointer_stack, checkpointer = await open_checkpointer()
+    store_stack, store = await open_store()
 
-        async with (
-            AsyncPostgresStore.from_conn_string(
-                settings.database_url,
-                index=index_config,
-            ) as store,
-            AsyncPostgresSaver.from_conn_string(settings.database_url) as checkpointer,
-        ):
+    try:
+        await checkpointer.setup()
+        if store is not None:
             await store.setup()
-            await checkpointer.setup()
-    else:
-        async with AsyncPostgresSaver.from_conn_string(
-            settings.database_url,
-        ) as checkpointer:
-            await checkpointer.setup()
+    finally:
+        if store_stack is not None:
+            await store_stack.aclose()
+        await checkpointer_stack.aclose()
 
     logger.info("langgraph_schema_bootstrap_done")
 

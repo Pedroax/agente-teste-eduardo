@@ -1,7 +1,7 @@
 # Banco de Dados
 
 Este documento explica as tabelas do projeto e traz queries de inspeção
-para validação operacional (fila, conversa, memória e recall).
+para validação operacional (fila, conversa e memória semântica via tools).
 
 ## Visão Geral
 
@@ -62,6 +62,7 @@ Controle interno de schema do checkpointer.
 Memórias em JSON por namespace/prefix.
 Para este projeto, padrão:
 - `prefix = "<user_id>.memories"`
+- sem namespaces de tenant (`tenant_user`/`tenant_shared`)
 
 ### `store_vectors`
 
@@ -118,20 +119,38 @@ WHERE prefix = '+5511999999999.memories'
 ORDER BY created_at DESC;
 ```
 
-### 4) Evidência de execução do recall de memória na thread
+### 4) Evidência de save no store (memória durável por usuário)
 
 ```sql
 SELECT
-  checkpoint_id,
-  checkpoint->'versions_seen' ? 'recall_memories.before_model' AS recall_step_seen,
-  checkpoint->>'ts' AS ts
-FROM checkpoints
-WHERE thread_id = '+5511999999999:rhawk_assistant'
-ORDER BY checkpoint_id DESC
+  prefix,
+  key,
+  value->>'memory' AS memory,
+  updated_at
+FROM store
+WHERE prefix = '+5511999999999.memories'
+ORDER BY updated_at DESC
 LIMIT 20;
 ```
 
-### 5) Inspeção técnica das mensagens persistidas no checkpoint
+### 5) Evidência de recall no output (resposta final ao usuário)
+
+```sql
+SELECT
+  id,
+  message_id,
+  phone_number,
+  status,
+  left(response, 220) AS response_preview,
+  created_at
+FROM message_queue
+WHERE phone_number = '+5511999999999'
+  AND status = 'done'
+ORDER BY id DESC
+LIMIT 20;
+```
+
+### 6) Inspeção técnica das mensagens persistidas no checkpoint
 
 ```sql
 SELECT
@@ -147,7 +166,7 @@ ORDER BY checkpoint_id DESC
 LIMIT 20;
 ```
 
-### 6) Conversas mais recentes (visão painel)
+### 7) Conversas mais recentes (visão painel)
 
 ```sql
 SELECT
@@ -164,7 +183,8 @@ LIMIT 50;
 
 ## Observações
 
-- `conversations` mostra apenas resumo; não mostra o detalhe de recall.
-- Recall de memória é observado em `checkpoints`/`checkpoint_writes` e logs do worker.
+- `conversations` mostra apenas resumo; não mostra detalhes de save/recall.
+- Save de memória é observado em `store` (`prefix = "<user_id>.memories"`).
+- Recall é observado no output final (`message_queue.response`) e nos logs do worker (`memory_read`).
 - `message_queue.status='done'` significa ciclo encerrado com resposta ao usuário,
   inclusive respostas automáticas quando mídia está desabilitada ou falha.

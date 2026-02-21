@@ -9,20 +9,16 @@ Responsável por:
 Uso:
     from whatsapp_langchain.worker.processor import process_message
 
-    await process_message(message, pool)
+    await process_message(message, pool, checkpointer=checkpointer, store=store)
 """
 
 import structlog
 from langchain_core.messages import HumanMessage
-from langchain_openai import OpenAIEmbeddings
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.store.postgres.aio import AsyncPostgresStore
-from langgraph.store.postgres.base import PostgresIndexConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 from psycopg_pool import AsyncConnectionPool
-from pydantic import SecretStr
 
 from whatsapp_langchain.agents.loader import load_graph
-from whatsapp_langchain.shared.config import settings
 from whatsapp_langchain.shared.models import MessageQueue
 from whatsapp_langchain.shared.queue import (
     mark_done,
@@ -40,6 +36,9 @@ logger = structlog.get_logger()
 async def process_message(
     message: MessageQueue,
     pool: AsyncConnectionPool,
+    *,
+    checkpointer: BaseCheckpointSaver,
+    store: BaseStore | None = None,
 ) -> None:
     """Processa uma mensagem da fila com o agente apropriado.
 
@@ -49,6 +48,8 @@ async def process_message(
     Args:
         message: Mensagem a processar (já reservada via claim).
         pool: Pool de conexões do psycopg.
+        checkpointer: Checkpointer LangGraph já inicializado no boot.
+        store: Store LangGraph compartilhado (None se memória desabilitada).
     """
     logger.info(
         "processing_message",
@@ -95,9 +96,7 @@ async def process_message(
         normalized_text = pre.normalized_text or message.incoming_message
         human_message = HumanMessage(content=normalized_text)
 
-        # 2. Carregar agente com checkpointer + store PostgreSQL
-        # from_conn_string é async context manager: cria conexão
-        # dedicada para cada componente e a fecha ao sair do bloco
+        # 2. Carregar agente com checkpointer + store (se memória habilitada)
         invoke_config = {
             "configurable": {
                 "thread_id": message.thread_id,
@@ -105,56 +104,15 @@ async def process_message(
             }
         }
 
-        if settings.memory_enabled:
-            # Memória habilitada: cria embeddings + store para memória semântica
-            api_key = settings.openrouter_api_key
-            secret_key = SecretStr(api_key.get_secret_value()) if api_key else None
-            embeddings = OpenAIEmbeddings(
-                model=settings.embedding_model,
-                base_url=settings.openrouter_base_url,
-                api_key=secret_key,
-            )
-
-            index_config: PostgresIndexConfig = {
-                "embed": embeddings,
-                "dims": settings.embedding_dims,
-                "fields": ["$"],
-            }
-
-            async with (
-                AsyncPostgresStore.from_conn_string(
-                    settings.database_url,
-                    index=index_config,
-                ) as store,
-                AsyncPostgresSaver.from_conn_string(
-                    settings.database_url,
-                ) as checkpointer,
-            ):
-                graph = load_graph(
-                    message.agent_id,
-                    checkpointer=checkpointer,
-                    store=store,
-                )
-
-                result = await graph.ainvoke(
-                    {"messages": [human_message]},
-                    config=invoke_config,
-                )
-        else:
-            # Memória desabilitada: só checkpointer, sem store/embeddings
-            logger.info("memory_disabled", message_id=message.id)
-            async with AsyncPostgresSaver.from_conn_string(
-                settings.database_url,
-            ) as checkpointer:
-                graph = load_graph(
-                    message.agent_id,
-                    checkpointer=checkpointer,
-                )
-
-                result = await graph.ainvoke(
-                    {"messages": [human_message]},
-                    config=invoke_config,
-                )
+        graph = load_graph(
+            message.agent_id,
+            checkpointer=checkpointer,
+            store=store,
+        )
+        result = await graph.ainvoke(
+            {"messages": [human_message]},
+            config=invoke_config,
+        )
 
         # 4. Extrair resposta
         response_text = result["messages"][-1].content

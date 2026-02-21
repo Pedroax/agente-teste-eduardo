@@ -34,15 +34,9 @@ class TestProcessorMemoryFlag:
     """Testes do flag memory_enabled no processor."""
 
     async def test_processor_skips_store_when_memory_disabled(self):
-        """Com MEMORY_ENABLED=false, processor não deve criar store."""
+        """Com MEMORY_ENABLED=false, processor deve carregar agente sem store."""
         with (
             patch.object(settings, "memory_enabled", False),
-            patch(
-                "whatsapp_langchain.worker.processor.AsyncPostgresSaver"
-            ) as mock_saver,
-            patch(
-                "whatsapp_langchain.worker.processor.AsyncPostgresStore"
-            ) as mock_store,
             patch(
                 "whatsapp_langchain.worker.processor.preprocess_incoming_message",
                 new_callable=AsyncMock,
@@ -62,20 +56,12 @@ class TestProcessorMemoryFlag:
                 new_callable=AsyncMock,
             ),
         ):
-            # Configura mocks para o fluxo sem memória
-            mock_checkpointer = AsyncMock()
-            mock_saver.from_conn_string.return_value.__aenter__ = AsyncMock(
-                return_value=mock_checkpointer
-            )
-            mock_saver.from_conn_string.return_value.__aexit__ = AsyncMock(
-                return_value=False
-            )
-
             mock_graph = AsyncMock()
             mock_graph.ainvoke.return_value = {
                 "messages": [MagicMock(content="resposta")]
             }
             mock_load.return_value = mock_graph
+            mock_checkpointer = AsyncMock()
 
             from whatsapp_langchain.shared.models import MessageQueue
             from whatsapp_langchain.worker.processor import process_message
@@ -88,18 +74,21 @@ class TestProcessorMemoryFlag:
                 incoming_message="Olá!",
             )
 
-            await process_message(message, AsyncMock())
+            await process_message(
+                message,
+                AsyncMock(),
+                checkpointer=mock_checkpointer,
+                store=None,
+            )
 
             mock_preprocess.assert_awaited_once()
-
-            # AsyncPostgresStore NÃO deve ser criado
-            mock_store.from_conn_string.assert_not_called()
 
             # Salva como done com metadados de pré-processamento
             assert mock_mark_done.await_count == 1
 
-            # load_graph deve ser chamado SEM store
+            # load_graph deve ser chamado sem store
             mock_load.assert_called_once_with(
                 "rhawk_assistant",
                 checkpointer=mock_checkpointer,
+                store=None,
             )
