@@ -402,19 +402,15 @@ class TestNoneMiddleware:
 class TestGetContextMiddleware:
     """Testes para a factory get_context_middleware()."""
 
-    def test_default_strategy_is_summarize(self):
-        """Verifica que o default é summarize quando não há env var."""
-        # Salva e limpa a env var
-        original = os.environ.pop("CONTEXT_STRATEGY", None)
+    def test_default_strategy_comes_from_settings(self):
+        """Sem override, a strategy deve vir de shared.config.settings."""
+        from unittest.mock import patch
 
-        try:
+        from whatsapp_langchain.shared.config import settings
+
+        with patch.object(settings, "context_strategy", "summarize"):
             middleware = get_context_middleware()
-            # Deve retornar um middleware (summarize)
             assert len(middleware) == 1
-        finally:
-            # Restaura
-            if original:
-                os.environ["CONTEXT_STRATEGY"] = original
 
     def test_override_parameters(self):
         """Verifica que parâmetros override funcionam."""
@@ -430,3 +426,13 @@ class TestGetContextMiddleware:
         middleware = get_context_middleware(strategy="invalid_strategy")
 
         assert middleware == []
+
+    def test_none_returns_empty(self):
+        """Sem estratégia de contexto, não deve haver middlewares."""
+        middleware = get_context_middleware(strategy="none")
+        assert middleware == []
+
+    def test_trim_returns_one_middleware(self):
+        """Trim deve produzir um único middleware."""
+        middleware = get_context_middleware(strategy="trim")
+        assert len(middleware) == 1

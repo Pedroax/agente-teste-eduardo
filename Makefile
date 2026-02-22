@@ -1,4 +1,4 @@
-.PHONY: help dev setup db api worker frontend up down logs lint format format-check fix typecheck check ci test test-x test-v clean
+.PHONY: help dev setup db migrate api worker frontend up down reset logs lint format format-check fix typecheck check ci test test-x test-v test-media test-demo test-demo-up test-flows clean
 
 # Cores para output
 CYAN := \033[36m
@@ -17,8 +17,11 @@ setup: ## Cria .venv e instala dependências
 dev: ## Inicia LangGraph Studio (desenvolvimento de agentes)
 	uv run langgraph dev
 
-db: ## Inicia apenas o PostgreSQL
-	docker compose up -d postgres
+db: ## Inicia apenas o PostgreSQL (com pgvector)
+	docker compose up -d db
+
+migrate: ## Aplica migrações pendentes no banco
+	uv run python db/migrate.py
 
 api: ## Roda a API localmente (fora do Docker)
 	uv run uvicorn whatsapp_langchain.server.main:app --reload --port 8000
@@ -35,6 +38,11 @@ up: ## Inicia todos os serviços (API + Worker + DB)
 
 down: ## Para todos os serviços
 	docker compose down
+
+reset: ## Reseta stack Docker (remove containers/rede/volumes e sobe com build limpo)
+	docker compose down -v --remove-orphans
+	docker compose up -d --build
+	docker compose ps
 
 logs: ## Mostra logs de todos os serviços
 	docker compose logs -f
@@ -67,17 +75,30 @@ check: ## Verifica tudo (lint + format + types) — não altera arquivos
 	uv run ruff check . && uv run ruff format --check . && uv run pyright src/
 
 ci: ## CI/CD: verifica tudo + roda testes — não altera arquivos
-	uv run ruff check . && uv run ruff format --check . && uv run pyright src/ && uv run pytest
+	uv run ruff check . && uv run ruff format --check . && uv run pyright src/ && uv run pytest -m "not docker_demo"
 
 ##@ Testes
 test: ## Roda todos os testes
-	uv run pytest
+	uv run pytest -m "not docker_demo"
 
 test-x: ## Roda testes, para no primeiro erro
-	uv run pytest -x
+	uv run pytest -x -m "not docker_demo"
 
 test-v: ## Roda testes com output verboso
-	uv run pytest -v
+	uv run pytest -v -m "not docker_demo"
+
+test-media: ## Roda testes de mídia real (requer OPENROUTER_API_KEY)
+	uv run pytest tests/integration/test_media_real.py -v -s
+
+test-demo: ## Roda testes demonstrativos (requer stack Docker rodando)
+	uv run pytest -m docker_demo -v
+
+test-demo-up: ## Sobe stack Docker e roda testes demonstrativos
+	docker compose up -d --build
+	uv run pytest -m docker_demo -v
+
+test-flows: ## Roda testes de fluxo realista (requer stack Docker)
+	uv run pytest tests/integration/test_realistic_flows.py -v -s
 
 ##@ Limpeza
 clean: ## Remove arquivos de cache do Python

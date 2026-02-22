@@ -1,171 +1,260 @@
 # Primeiros Passos
 
+Este guia tem duas trilhas:
+- **Trilha A (agentes):** LangGraph Studio para desenvolver comportamento
+- **Trilha B (sistema):** API + Worker + DB para aprender arquitetura operacional
+
 ## Pré-requisitos
 
-- **Python 3.11+** — [python.org](https://www.python.org/)
-- **uv** — [docs.astral.sh/uv](https://docs.astral.sh/uv/) (gerenciador de pacotes)
-- **Conta OpenRouter** — [openrouter.ai](https://openrouter.ai/) (chave de API para os modelos)
+- Python 3.11+
+- `uv` (gerenciador de pacotes)
+- Docker + Docker Compose
+- conta OpenRouter (API key)
 
-## 1. Instalando o uv
-
-O **uv** é um gerenciador de pacotes moderno e rápido. Funciona nativamente no Windows, Mac e Linux.
-
-```bash
-# Windows (PowerShell)
-irm https://astral.sh/uv/install.ps1 | iex
-
-# Mac/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Ou via pip (qualquer OS)
-pip install uv
-```
-
-## 2. Setup do Projeto
+## 1. Setup local
 
 ```bash
 git clone <repo-url>
 cd whatsapp-langchain
-
-# Cria ambiente virtual e instala dependências
 make setup
-# Ou manualmente:
-# uv venv
-# uv pip install -e ".[dev]"
-
-# Copia o template de variáveis de ambiente
 cp .env.example .env
 ```
 
-Edite o `.env` com suas credenciais:
+Edite `.env` e configure no mínimo:
 
 ```bash
-# Obrigatório
 OPENROUTER_API_KEY=sk-or-v1-...
-
-# O resto pode ficar com os valores padrão para dev
+OPENROUTER_MIDIA_MODEL=google/gemini-2.5-flash-lite
 ```
 
-## 3. Desenvolvendo Agentes (LangGraph Studio)
-
-O jeito mais rápido de começar é usando o LangGraph Studio:
+## 2. Trilha A: desenvolvimento de agente no Studio
 
 ```bash
 make dev
-# Ou manualmente: uv run langgraph dev
+# abre o LangGraph Studio
 ```
 
-Isso abre o LangGraph Studio no navegador. Você pode:
-- Conversar com o agente `rhawk_assistant`
-- Ver o grafo executando em tempo real
-- Testar diferentes configurações de middleware
+O grafo padrão é `rhawk_assistant`, registrado em `langgraph.json`.
 
-O agente é definido em `src/whatsapp_langchain/agents/catalog/rhawk_assistant/`. Edite os arquivos e veja as mudanças ao vivo:
+Arquivos centrais do agente:
+- `src/whatsapp_langchain/agents/catalog/rhawk_assistant/agent.py`
+- `src/whatsapp_langchain/agents/catalog/rhawk_assistant/prompts.py`
+- `src/whatsapp_langchain/agents/catalog/rhawk_assistant/graph.py`
 
-| Arquivo | Responsabilidade |
-|---------|-----------------|
-| `agent.py` | Factory `build_graph()` — configura modelo e middleware |
-| `graph.py` | Exporta variável `graph` para o LangGraph Studio |
-| `prompts.py` | System prompt do agente |
+## 3. Trilha B: stack completo da Fase 2
 
-### Configurando o Middleware de Contexto
-
-O `.env` controla a estratégia de gerenciamento de contexto:
+### Subir serviços
 
 ```bash
-# No .env
-CONTEXT_STRATEGY=trim        # trim | summarize | none
-
-# Para trim: mantém os N turnos mais recentes
-# Um turno = 1 HumanMessage + todas as respostas (AI, tools, etc)
-TRIM_KEEP_TURNS=5
-
-# Para summarize: sumariza quando excede o limite de tokens
-SUMMARIZE_TRIGGER_TOKENS=4000
-SUMMARIZE_KEEP_MESSAGES=10
-SUMMARIZE_MODEL=google/gemini-3-flash-preview
+make up
 ```
 
-Mude `CONTEXT_STRATEGY` e reinicie o LangGraph Studio para testar diferentes estratégias.
+Isso sobe:
+- `db` (PostgreSQL + pgvector)
+- `api` (FastAPI)
+- `worker` (consumidor da fila)
 
-## 4. Testes
+### Reset completo do ambiente Docker
+
+Para reiniciar do zero (incluindo volume do PostgreSQL e dados):
+
+```bash
+make reset
+```
+
+### Validar saúde
+
+```bash
+curl http://localhost:8000/health
+```
+
+### Ver logs
+
+```bash
+make logs
+```
+
+## 4. Testes de fluxo
+
+### 4.1 Endpoint síncrono (didático)
+
+```bash
+curl -X POST "http://localhost:8000/webhook/sync?agent=rhawk_assistant" \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"+5511999999999","message":"Me explique debounce"}'
+```
+
+Use para debugging rápido sem fila.
+
+### 4.2 Webhook assíncrono (arquitetura real)
+
+```bash
+curl -X POST "http://localhost:8000/webhook/twilio?agent=rhawk_assistant" \
+  -d "MessageSid=SM123" \
+  -d "From=whatsapp:+5511999999999" \
+  -d "To=whatsapp:+14155238886" \
+  -d "Body=Mensagem de teste" \
+  -d "NumMedia=0"
+```
+
+Depois consulte:
+
+```bash
+curl http://localhost:8000/api/metrics
+curl http://localhost:8000/api/chats
+curl http://localhost:8000/api/chats/+5511999999999
+```
+
+### 4.2.1 Teste manual no Swagger (`/docs`)
+
+1. Abra `http://localhost:8000/docs`.
+2. Execute `GET /api/agents` e confirme `rhawk_assistant`.
+3. Abra `POST /webhook/twilio` e clique em `Try it out`.
+4. Preencha:
+   - `agent` (query): `rhawk_assistant`
+   - `MessageSid`: `SMDOCS001`
+   - `From`: `whatsapp:+5511999999999`
+   - `To`: `whatsapp:+14155238886`
+   - `Body`: `Mensagem de teste via Swagger`
+   - `NumMedia`: `0`
+5. Execute e verifique:
+   - resposta `200` com TwiML vazio
+   - dados em `GET /api/chats/+5511999999999`
+
+### 4.3 Teste de memória semântica (save + recall via tools)
+
+1. Envie uma mensagem pedindo para salvar um fato:
+
+```bash
+curl -X POST "http://localhost:8000/webhook/twilio?agent=rhawk_assistant" \
+  -d "MessageSid=SMMEM001" \
+  -d "From=whatsapp:+5511999999999" \
+  -d "To=whatsapp:+14155238886" \
+  -d "Body=Use a ferramenta save_memory e salve este fato: meu código é codex-12345" \
+  -d "NumMedia=0"
+```
+
+2. Envie outra mensagem pedindo recall explícito:
+
+```bash
+curl -X POST "http://localhost:8000/webhook/twilio?agent=rhawk_assistant" \
+  -d "MessageSid=SMMEM002" \
+  -d "From=whatsapp:+5511999999999" \
+  -d "To=whatsapp:+14155238886" \
+  -d "Body=Sem salvar nada novo agora, use read_memory e me diga meu código" \
+  -d "NumMedia=0"
+```
+
+3. Verifique evidências no banco:
+
+```sql
+SELECT prefix, value->>'memory' AS memory, updated_at
+FROM store
+WHERE prefix = '+5511999999999.memories'
+ORDER BY updated_at DESC;
+
+SELECT id, message_id, status, response
+FROM message_queue
+WHERE phone_number = '+5511999999999'
+ORDER BY id DESC
+LIMIT 5;
+```
+
+## 5. Configurações importantes (.env)
+
+### Contexto
+
+```bash
+CONTEXT_STRATEGY=trim            # trim | summarize | none
+TRIM_KEEP_TURNS=5
+SUMMARIZE_TRIGGER_TOKENS=4000
+SUMMARIZE_KEEP_MESSAGES=10
+SUMMARIZE_MODEL=x-ai/grok-4.1-fast
+```
+
+### Memória semântica
+
+```bash
+MEMORY_ENABLED=true
+# Use o modelo de embedding que está ativo no seu .env
+# (deve bater com as dimensões abaixo)
+EMBEDDING_MODEL=<modelo-de-embedding-em-uso>
+EMBEDDING_DIMS=<dims-do-modelo>
+MEMORY_SEARCH_LIMIT=5
+```
+
+Para evitar divergência de documentação vs ambiente, confirme os valores ativos:
+
+```bash
+grep -E '^EMBEDDING_MODEL|^EMBEDDING_DIMS' .env
+```
+
+### Operação da fila
+
+```bash
+MESSAGE_BUFFER_SECONDS=2.0
+POLL_INTERVAL_SECONDS=1.0
+LEASE_SECONDS=60
+MAX_ATTEMPTS=3
+RATE_LIMIT_PER_HOUR=30
+```
+
+## 6. Qualidade e testes
 
 ```bash
 make test
-# Ou manualmente: uv run pytest
-```
-
-Outros comandos úteis:
-
-```bash
-make test-x    # Para no primeiro erro
-make test-v    # Output verboso
-```
-
-> **Nota:** Os testes de integração requerem `OPENROUTER_API_KEY` configurada no `.env`.
-
-## 5. Qualidade de Código
-
-O projeto usa **Ruff** para linting/formatação e **Pyright** para type checking.
-
-```bash
-# Encontra problemas
-make lint
-
-# Formata código automaticamente
-make format
-
-# Corrige problemas automaticamente
-make fix
-
-# Verifica tipos estáticos
-make typecheck
-
-# Verifica tudo de uma vez (lint + format + types)
 make check
 ```
 
-Fluxo recomendado antes de commitar:
+Comandos úteis:
 
 ```bash
-make fix && make format    # Corrige e formata
-make check                 # Verifica se está tudo ok
+make test-x
+make test-v
+make lint
+make format
+make typecheck
 ```
 
-## Troubleshooting
+### Testes demonstrativos (com Docker)
 
-### LangGraph Studio não abre
+Esses testes validam features de demonstração (imagem, áudio e memória semântica)
+no fluxo real da stack Docker.
 
-```
-Verifique se o uv está instalado: uv --version
-Verifique se as dependências estão instaladas: make setup
-Verifique se o langgraph.json está na raiz do projeto
-```
-
-### Erro "OPENROUTER_API_KEY not set"
-
-```
-Verifique se o .env existe: ls .env
-Verifique se a chave está configurada: grep OPENROUTER_API_KEY .env
-Gere uma chave em: https://openrouter.ai/keys
+```bash
+make test-demo
+# ou:
+make test-demo-up
 ```
 
-### Modelo não responde ou retorna erro
+## 7. Troubleshooting
 
-```
-Verifique se a chave do OpenRouter tem créditos
-Verifique o modelo configurado em OPENROUTER_MODEL no .env
-Teste com um modelo gratuito: google/gemini-3-flash-preview
-```
+### `OPENROUTER_API_KEY` ausente
 
-### Testes falham com "requires API key"
-
-```
-Os testes de integração precisam de uma chave válida no .env
-Para pular testes de integração: uv run pytest -k "not integration"
+```bash
+grep OPENROUTER_API_KEY .env
 ```
 
-## Próximos Passos
+### API sem conectar no banco
 
-- [Criando Agentes](ADDING_AGENTS.md) — Crie seu próprio agente com middleware personalizado
-- [Arquitetura](ARCHITECTURE.md) — Entenda como o sistema funciona e para onde vai
+- confira `DATABASE_URL` no `.env`
+- se estiver em Docker, lembre que API/Worker usam host `db` via `docker-compose.yml`
+
+### Worker não processa mensagens
+
+- verifique se o serviço `worker` está rodando (`make logs`)
+- confira se há mensagens `queued` e `process_after <= now()`
+- valide se o agente passado em `agent=` existe no catálogo
+
+### Mídia não transcreve/processa
+
+- confirme `MEDIA_IMAGE_ENABLED` / `MEDIA_AUDIO_ENABLED`
+- confira se há chave OpenRouter válida
+- verifique logs de `worker.media`
+
+## Próximos passos
+
+- [Arquitetura](ARCHITECTURE.md)
+- [Criando Agentes](ADDING_AGENTS.md)
+- [Banco de Dados](DATABASE.md)
+- [Deploy](DEPLOY.md)
