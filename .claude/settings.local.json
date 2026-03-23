@@ -12,7 +12,10 @@
       "Bash(git remote remove:*)",
       "Bash(git remote add:*)",
       "Bash(python -m pip:*)",
-      "Bash(requirements.txt)"
+      "Bash(requirements.txt)",
+      "Bash(curl:*)",
+      "Bash(railway logs:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
