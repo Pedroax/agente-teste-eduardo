@@ -15,6 +15,3 @@ RUN pip install --no-cache-dir -e .
 COPY src/ ./src/
 
 EXPOSE 8000
-
-# Comando será sobrescrito pelo Procfile no Railway
-CMD ["echo", "Use Procfile"]
