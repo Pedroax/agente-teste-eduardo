@@ -19,10 +19,10 @@ from whatsapp_langchain.shared.db import (
     open_store,
     run_migrations,
 )
+from whatsapp_langchain.shared.messaging import get_messaging_client
 from whatsapp_langchain.shared.observability import setup_logging
 from whatsapp_langchain.worker.consumer import claim_next_message
 from whatsapp_langchain.worker.processor import process_message
-from whatsapp_langchain.worker.twilio_client import TwilioClient
 
 logger = structlog.get_logger()
 
@@ -47,34 +47,17 @@ async def main() -> None:
     if store:
         await store.setup()
 
-    # Twilio outbound: obrigatório — fail-fast se credenciais ausentes.
-    # Usa API Key (api_key_sid + api_key_secret) para envio,
-    # separado de auth_token (usado apenas para validação de assinatura inbound).
-    missing = []
-    if not settings.twilio_account_sid:
-        missing.append("TWILIO_ACCOUNT_SID")
-    if not settings.twilio_api_key_sid:
-        missing.append("TWILIO_API_KEY_SID")
-    if not settings.twilio_api_key_secret:
-        missing.append("TWILIO_API_KEY_SECRET")
-    if not settings.twilio_from_number:
-        missing.append("TWILIO_FROM_NUMBER")
+    # Cliente de mensagens unificado (UAZAPI ou Twilio)
+    messaging_client = get_messaging_client()
 
-    if missing:
-        logger.error(
-            "twilio_credentials_missing",
-            missing=missing,
-        )
-        msg = f"Twilio obrigatório. Variáveis ausentes: {', '.join(missing)}"
-        raise SystemExit(msg)
+    if not messaging_client.client:
+        logger.error("messaging_client_not_configured")
+        raise SystemExit("Nenhum provedor de mensagens configurado (UAZAPI_INSTANCE_TOKEN ou TWILIO_ACCOUNT_SID)")
 
-    twilio = TwilioClient(
-        account_sid=settings.twilio_account_sid,
-        api_key_sid=settings.twilio_api_key_sid,
-        api_key_secret=settings.twilio_api_key_secret,
-        from_number=settings.twilio_from_number,
+    logger.info(
+        "messaging_client_ready",
+        provider="UAZAPI" if messaging_client.use_uazapi else "Twilio"
     )
-    logger.info("twilio_client_ready", from_number=settings.twilio_from_number)
 
     logger.info(
         "worker_ready",
@@ -95,7 +78,7 @@ async def main() -> None:
                 pool,
                 checkpointer=checkpointer,
                 store=store,
-                twilio=twilio,
+                messaging_client=messaging_client,
             )
 
     except KeyboardInterrupt:

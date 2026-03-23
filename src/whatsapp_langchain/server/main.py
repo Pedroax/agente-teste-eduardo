@@ -22,6 +22,9 @@ from whatsapp_langchain.server.routes.webhook import router as webhook_router
 from whatsapp_langchain.server.routes.webhook_sync import (
     router as webhook_sync_router,
 )
+from whatsapp_langchain.server.routes.webhook_uazapi import (
+    router as webhook_uazapi_router,
+)
 from whatsapp_langchain.shared.config import settings
 from whatsapp_langchain.shared.db import (
     bootstrap_langgraph_schema,
@@ -94,4 +97,5 @@ async def agent_not_found_handler(
 app.include_router(health_router)
 app.include_router(webhook_router)
 app.include_router(webhook_sync_router)
+app.include_router(webhook_uazapi_router)
 app.include_router(admin_router)

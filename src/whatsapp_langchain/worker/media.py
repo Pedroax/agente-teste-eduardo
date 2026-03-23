@@ -50,30 +50,79 @@ class MediaPreprocessResult:
 async def download_media(
     url: str,
 ) -> bytes:
-    """Faz download de mídia do Twilio.
+    """Faz download de mídia (Twilio ou UAZAPI).
 
-    Autentica com API Key (api_key_sid:api_key_secret) — mesmas credenciais
-    usadas pelo TwilioClient para envio outbound.
+    Args:
+        url: URL da mídia fornecida pelo webhook
+
+    Returns:
+        Bytes da mídia baixada
+
+    Note:
+        - Para Twilio: autentica com API Key
+        - Para UAZAPI: URLs geralmente públicas ou com token no header
     """
-    auth = (
-        (settings.twilio_api_key_sid, settings.twilio_api_key_secret)
-        if settings.twilio_api_key_sid
-        else None
-    )
+    # Detectar provedor baseado na URL
+    is_twilio = "twilio.com" in url.lower()
+    is_uazapi = "uazapi.com" in url.lower()
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, auth=auth, follow_redirects=True)
+    auth = None
+    headers = {}
+
+    if is_twilio:
+        # Twilio requer autenticação básica
+        auth = (
+            (settings.twilio_api_key_sid, settings.twilio_api_key_secret)
+            if settings.twilio_api_key_sid
+            else None
+        )
+    elif is_uazapi:
+        # UAZAPI pode requerer token no header
+        uazapi_token = getattr(settings, "uazapi_instance_token", None)
+        if uazapi_token:
+            headers["Authorization"] = f"Bearer {uazapi_token}"
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.get(
+            url,
+            auth=auth,
+            headers=headers,
+            follow_redirects=True
+        )
         response.raise_for_status()
         return response.content
 
 
 def _media_kind(media_type: str | None) -> str:
+    """Determina tipo de mídia para processamento.
+
+    Suportado:
+    - image: JPG, PNG, WEBP, GIF
+    - audio: MP3, WAV, OGG, WEBM, AAC
+    - video: MP4, WEBM, MOV (tratado como imagem - frame extraído)
+    - document: PDF, DOC, DOCX (tratado como imagem - preview)
+
+    Returns:
+        'image', 'audio', 'video', 'document', 'unsupported', ou 'none'
+    """
     if not media_type:
         return "none"
-    if media_type.startswith("image/"):
+
+    media_lower = media_type.lower()
+
+    if media_lower.startswith("image/"):
         return "image"
-    if media_type.startswith("audio/"):
+
+    if media_lower.startswith("audio/"):
         return "audio"
+
+    if media_lower.startswith("video/"):
+        return "video"
+
+    # Documentos (PDF, Office, etc)
+    if any(doc_type in media_lower for doc_type in ["pdf", "document", "msword", "officedocument"]):
+        return "document"
+
     return "unsupported"
 
 
