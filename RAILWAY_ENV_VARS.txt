@@ -1,0 +1,38 @@
+# Cole estas variáveis no Railway (Settings > Variables)
+
+OPENROUTER_API_KEY=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
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
+OPENROUTER_MIDIA_MODEL=google/gemini-2.0-flash-exp
+
+UAZAPI_BASE_URL=https://api-ax.uazapi.com
+UAZAPI_INSTANCE_TOKEN=42e8b4fe-87fe-4118-a218-6857b566bc93
+UAZAPI_PHONE_NUMBER=556196502174
+
+# Esta variável é gerada automaticamente pelo Railway quando você adiciona PostgreSQL
+# Copie ela da aba "Variables" depois que criar o banco
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+
+PORT=8000
+LOG_LEVEL=info
+LOG_JSON=true
+
+RATE_LIMIT_PER_HOUR=30
+MESSAGE_BUFFER_SECONDS=2.0
+LLM_RATE_LIMIT_REQUESTS_PER_SECOND=0.5
+LLM_RATE_LIMIT_MAX_BURST=10
+
+POLL_INTERVAL_SECONDS=1.0
+LEASE_SECONDS=60
+MAX_ATTEMPTS=3
+
+MEDIA_IMAGE_ENABLED=true
+MEDIA_AUDIO_ENABLED=true
+
+CONTEXT_STRATEGY=trim
+TRIM_KEEP_TURNS=5
+
+MEMORY_ENABLED=true
+EMBEDDING_MODEL=openai/text-embedding-3-small
+EMBEDDING_DIMS=1536
+MEMORY_SEARCH_LIMIT=5
