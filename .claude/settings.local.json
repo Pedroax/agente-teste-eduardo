@@ -5,7 +5,12 @@
       "Bash(docker-compose up:*)",
       "Bash(python test_agente.py:*)",
       "Bash(pip install:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(railway --version:*)",
+      "Bash(git remote remove:*)",
+      "Bash(git remote add:*)"
     ],
     "deny": [],
     "ask": []
