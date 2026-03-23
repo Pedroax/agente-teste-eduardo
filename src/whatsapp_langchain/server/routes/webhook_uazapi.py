@@ -6,7 +6,7 @@ Endpoint POST que recebe mensagens do UAZAPI e enfileira para processamento ass√
 from fastapi import APIRouter, Request, Response
 from structlog import get_logger
 
-from whatsapp_langchain.shared.queue import enqueue_message
+from whatsapp_langchain.shared.queue import enqueue_or_buffer
 
 logger = get_logger(__name__)
 
@@ -144,7 +144,7 @@ async def webhook_uazapi(request: Request, agent: str = "fhe_assistant") -> Resp
         # Enfileirar mensagem para processamento ass√≠ncrono
         message_id = key.get("id", "")
 
-        await enqueue_message(
+        await enqueue_or_buffer(
             message_id=message_id,
             phone=from_number,
             body=body.strip() if body else "",
