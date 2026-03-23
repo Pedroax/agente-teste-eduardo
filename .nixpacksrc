@@ -1,5 +1,12 @@
 {
   "phases": {
+    "setup": {
+      "nixPkgs": ["python313"],
+      "nixLibs": []
+    },
     "install": null
+  },
+  "variables": {
+    "NIXPACKS_NO_MUSL": "1"
   }
 }
