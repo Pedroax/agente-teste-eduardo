@@ -15,7 +15,8 @@
       "Bash(requirements.txt)",
       "Bash(curl:*)",
       "Bash(railway logs:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []
